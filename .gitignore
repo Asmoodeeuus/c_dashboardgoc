@@ -1,13 +1,15 @@
 # Security: Ignore CSV files containing server/team data
 *.csv
 
-# Tooling: Ignore VS Code settings and SQL session files
+# Tooling
 .vscode/
 *.session.sql
 
-# Backend: Standard node/environment ignores
+# Backend
 node_modules/
 .env
 
-certs\
+# Certificates
+certs/
 *.pem
+``
