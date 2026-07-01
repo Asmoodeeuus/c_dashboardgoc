@@ -39,12 +39,17 @@ export default function Dashboard() {
     const [cachedCritical, setCachedCritical] = useState([]);
     const [cachedWarning, setCachedWarning] = useState([]);
     const [cachedUnknown, setCachedUnknown] = useState([]);
+    const [cachedSearchResults, setCachedSearchResults] = useState([]);
     const [pollerDropdownList, setPollerDropdownList] = useState([]);
 
     // --- POLLERS DRILL-DOWN STATE ---
     const [cachedPollers, setCachedPollers] = useState([]);
     const [pollerSearch, setPollerSearch] = useState('');
     const [selectedPoller, setSelectedPoller] = useState(null);
+
+    // --- GLOBAL SEARCH STATE ---
+    const [debouncedHostSearch, setDebouncedHostSearch] = useState('');
+    const [debouncedServiceSearch, setDebouncedServiceSearch] = useState('');
 
     // ============================================================
     // NORMALIZER HELPERS
@@ -110,6 +115,30 @@ export default function Dashboard() {
     }, [location, navigate]);
 
     // ============================================================
+    // HOST SEARCH DEBOUNCE
+    // ============================================================
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setDebouncedHostSearch(filters.host.trim());
+            setServicePage(1);
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [filters.host]);
+
+    // ============================================================
+    // SERVICE SEARCH DEBOUNCE
+    // ============================================================
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setDebouncedServiceSearch(filters.service.trim());
+            setServicePage(1);
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [filters.service]);
+
+    // ============================================================
     // CONNECTED FETCH ENGINE
     // ============================================================
     const refreshDashboardData = useCallback(async () => {
@@ -125,9 +154,15 @@ export default function Dashboard() {
                 }
             };
 
+            const hasGlobalSearch = Boolean(debouncedHostSearch || debouncedServiceSearch);
+
+            const servicesEndpoint = hasGlobalSearch
+                ? `${BASE_API_URL}/api/centreon/services/search?host=${encodeURIComponent(debouncedHostSearch)}&service=${encodeURIComponent(debouncedServiceSearch)}&page=${servicePage}&limit=${serviceLimit}`
+                : `${BASE_API_URL}/api/centreon/services/status/summary?page=${servicePage}&limit=${serviceLimit}`;
+
             const [hostsRes, summaryRes] = await Promise.all([
                 fetch(`${BASE_API_URL}/api/centreon/hosts/status/all`, fetchOptions),
-                fetch(`${BASE_API_URL}/api/centreon/services/status/summary?page=${servicePage}&limit=${serviceLimit}`, fetchOptions)
+                fetch(servicesEndpoint, fetchOptions)
             ]);
 
             if (!hostsRes.ok || !summaryRes.ok) {
@@ -138,6 +173,7 @@ export default function Dashboard() {
             const summaryPayload = await summaryRes.json();
 
             const rawHosts = hostsPayload.data?.result || [];
+            const allReturnedServices = (summaryPayload.data?.result || []).map(normalizeService);
 
             const criticals = (summaryPayload.services?.critical || []).map(normalizeService);
             const warnings = (summaryPayload.services?.warning || []).map(normalizeService);
@@ -147,11 +183,18 @@ export default function Dashboard() {
             setCachedWarning(warnings);
             setCachedUnknown(unknowns);
 
+            if (hasGlobalSearch) {
+                setCachedSearchResults(allReturnedServices);
+            } else {
+                setCachedSearchResults([]);
+            }
+
             const criticalCount = summaryPayload.counts?.critical ?? criticals.length;
             const warningCount = summaryPayload.counts?.warning ?? warnings.length;
             const unknownCount = summaryPayload.counts?.unknown ?? unknowns.length;
 
             const allActiveIssues =
+                summaryPayload.counts?.allActiveIssues ??
                 summaryPayload.counts?.allServices ??
                 criticalCount + warningCount + unknownCount;
 
@@ -162,11 +205,13 @@ export default function Dashboard() {
                 unknown: unknownCount
             });
 
-            setServiceMeta(summaryPayload.meta || {
-                page: servicePage,
-                limit: serviceLimit,
-                total: 0
-            });
+            setServiceMeta(
+                summaryPayload.meta || {
+                    page: servicePage,
+                    limit: serviceLimit,
+                    total: summaryPayload.count || allReturnedServices.length || 0
+                }
+            );
 
             const normalizedHosts = rawHosts.map(normalizeHost);
 
@@ -186,7 +231,7 @@ export default function Dashboard() {
         } finally {
             setIsLoadingServices(false);
         }
-    }, [servicePage, serviceLimit]);
+    }, [debouncedHostSearch, debouncedServiceSearch, servicePage, serviceLimit]);
 
     const fetchPollersRoster = useCallback(async () => {
         try {
@@ -295,10 +340,36 @@ export default function Dashboard() {
         return counts;
     }, [activePollerContext, counts, cachedCritical, cachedWarning, cachedUnknown]);
 
+    const isSearchMode = Boolean(debouncedHostSearch || debouncedServiceSearch);
+
     const filteredServices = useMemo(() => {
         let source = [];
 
-        if (showAllStatusesForPoller) {
+        if (isSearchMode) {
+            if (isSearchMode) {
+    const activeIssueResults = cachedSearchResults.filter(item =>
+        item.statusCode === 1 ||
+        item.statusCode === 2 ||
+        item.statusCode === 3
+    );
+
+    if (currentTableType === 'all') {
+        source = activeIssueResults;
+    }
+
+    if (currentTableType === 'critical') {
+        source = activeIssueResults.filter(item => item.statusCode === 2);
+    }
+
+    if (currentTableType === 'warning') {
+        source = activeIssueResults.filter(item => item.statusCode === 1);
+    }
+
+    if (currentTableType === 'unknown') {
+        source = activeIssueResults.filter(item => item.statusCode === 3);
+    }
+}
+        } else if (showAllStatusesForPoller) {
             source = [...cachedCritical, ...cachedWarning, ...cachedUnknown];
         } else {
             if (currentTableType === 'all') source = [...cachedCritical, ...cachedWarning, ...cachedUnknown];
@@ -311,7 +382,8 @@ export default function Dashboard() {
             const matchHost =
                 !filters.host ||
                 item.host?.name?.toLowerCase().includes(filters.host.toLowerCase()) ||
-                item.host?.display_name?.toLowerCase().includes(filters.host.toLowerCase());
+                item.host?.display_name?.toLowerCase().includes(filters.host.toLowerCase()) ||
+                item.host?.alias?.toLowerCase().includes(filters.host.toLowerCase());
 
             const matchService =
                 !filters.service ||
@@ -325,8 +397,10 @@ export default function Dashboard() {
             return matchHost && matchService && matchPoller;
         });
     }, [
+        isSearchMode,
         showAllStatusesForPoller,
         currentTableType,
+        cachedSearchResults,
         cachedCritical,
         cachedWarning,
         cachedUnknown,
@@ -574,7 +648,9 @@ export default function Dashboard() {
                         <div className="services-section">
                             <div className="section-header">
                                 <div className="section-header-left">
-                                    <h2 className="section-title">Active Exceptions</h2>
+                                    <h2 className="section-title">
+                                        {isSearchMode ? 'Search Results' : 'Active Exceptions'}
+                                    </h2>
                                     <span className="service-count">
                                         {isLoadingServices ? 'Loading...' : `${filteredServices.length} Targets`}
                                     </span>
@@ -599,7 +675,7 @@ export default function Dashboard() {
                                                 <td colSpan="5" className="loading-cell">
                                                     {isLoadingServices
                                                         ? 'Loading services...'
-                                                        : 'No active tracking exceptions found matching current criteria.'}
+                                                        : 'No services found matching current criteria.'}
                                                 </td>
                                             </tr>
                                         ) : (
