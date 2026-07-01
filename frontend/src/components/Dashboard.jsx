@@ -602,7 +602,7 @@ export default function Dashboard() {
                             <div className="filter-section" style={{ width: '100%' }}>
                                 <div className="filter-controls-vertical">
                                     <div className="filter-input-group">
-                                        <label>HOST NODE</label>
+                                        <label>HOST</label>
                                         <input
                                             type="text"
                                             className="filter-input"
@@ -613,7 +613,7 @@ export default function Dashboard() {
                                     </div>
 
                                     <div className="filter-input-group">
-                                        <label>SERVICE TARGET</label>
+                                        <label>SERVICES</label>
                                         <input
                                             type="text"
                                             className="filter-input"
@@ -624,7 +624,7 @@ export default function Dashboard() {
                                     </div>
 
                                     <div className="filter-input-group">
-                                        <label>MONITORING ENGINE</label>
+                                        <label>POLLERS</label>
                                         <select
                                             className="filter-select"
                                             value={filters.poller}
