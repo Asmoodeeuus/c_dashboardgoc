@@ -61,6 +61,7 @@ export default function Dashboard() {
 
     // Prevent stale search requests from overwriting newer results.
     const dashboardGlobalListRequestIdRef = useRef(0);
+    const dashboardSearchActiveRef = useRef(false);
 
     const [cachedCritical, setCachedCritical] = useState([]);
     const [cachedWarning, setCachedWarning] = useState([]);
@@ -233,6 +234,18 @@ export default function Dashboard() {
         return () => clearTimeout(timer);
     }, [filters.service]);
 
+    useEffect(() => {
+    dashboardSearchActiveRef.current =
+        location.pathname === '/dashboard' &&
+        filters.poller === 'all' &&
+        Boolean(debouncedHostSearch || debouncedServiceSearch);
+}, [
+    location.pathname,
+    filters.poller,
+    debouncedHostSearch,
+    debouncedServiceSearch
+]);
+
     // ============================================================
     // GLOBAL DASHBOARD SUMMARY FETCH
     // ============================================================
@@ -257,7 +270,12 @@ export default function Dashboard() {
 
             setIsRefreshingGlobalSummary(Boolean(payload.refreshing));
 
-            if (shouldUpdateCards && payload.counts && payload.cached) {
+            if (
+                shouldUpdateCards &&
+                !dashboardSearchActiveRef.current &&
+                payload.counts &&
+                payload.cached
+            ) {
                 setGlobalDashboardCounts({
                     allActiveIssues: payload.counts.allActiveIssues,
                     critical: payload.counts.critical,
@@ -268,7 +286,9 @@ export default function Dashboard() {
 
             if (payload.meta?.cacheRefreshing && !payload.meta?.cacheFresh) {
                 setTimeout(() => {
-                    fetchGlobalDashboardSummary(shouldUpdateCards);
+                    if (!dashboardSearchActiveRef.current) {
+                        fetchGlobalDashboardSummary(shouldUpdateCards);
+                    }
                 }, 10000);
             }
 
@@ -1310,7 +1330,7 @@ export default function Dashboard() {
         <div className="app-container">
             <aside className="sidebar">
                 <div className="logo">
-                    {cevaLogo}
+                    <img src={cevaLogo} alt="CEVA Logo" className="logo-image" />
                     <span className="logo-text">GOC Dashboard</span>
                 </div>
 
