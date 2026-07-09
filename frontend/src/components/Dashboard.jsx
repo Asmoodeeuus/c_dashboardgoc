@@ -76,7 +76,7 @@ export default function Dashboard() {
 
     const [pollerHosts, setPollerHosts] = useState([]);
     const [pollerHostPage, setPollerHostPage] = useState(1);
-    const [pollerHostLimit] = useState(20);
+    const [pollerHostLimit, setPollerHostLimit] = useState(20);
     const [pollerHostMeta, setPollerHostMeta] = useState({
         page: 1,
         limit: 20,
@@ -99,6 +99,11 @@ export default function Dashboard() {
     // --- GLOBAL SEARCH STATE ---
     const [debouncedHostSearch, setDebouncedHostSearch] = useState('');
     const [debouncedServiceSearch, setDebouncedServiceSearch] = useState('');
+
+    // --- ACKNOWLEDGE MODAL STATE ---
+    const [showAckModal, setShowAckModal] = useState(false);
+    const [ackComment, setAckComment] = useState('');
+    const [pendingAck, setPendingAck] = useState(null);
 
     // ============================================================
     // NORMALIZER HELPERS
@@ -1023,6 +1028,16 @@ export default function Dashboard() {
         setServicePage(1);
     };
 
+    const handlePollerPageSizeChange = (e) => {
+        setPollerHostLimit(Number(e.target.value));
+        setPollerHostPage(1);
+    };
+
+    const extractIpFromText = (text = '') => {
+        const match = String(text).match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+        return match ? match[0] : null;
+    };
+
     // ============================================================
     // ACKNOWLEDGMENT / UNACKNOWLEDGMENT / LOGOUT
     // ============================================================
@@ -1165,7 +1180,14 @@ export default function Dashboard() {
         setCachedSearchResults(prev => prev.map(patchService));
     }, []);
 
-    const handleAcknowledge = async (hostName, serviceDescription, hostId = null, serviceId = null) => {
+    const handleAcknowledge = async (
+        hostName,
+        serviceDescription,
+        hostId = null,
+        serviceId = null,
+        hostAddress = null,
+        customComment = null
+    ) => {
         const ackKey = getAckKey(hostName, serviceDescription, hostId, serviceId);
 
         try {
@@ -1177,18 +1199,25 @@ export default function Dashboard() {
 
             const token = localStorage.getItem('centreon_auth_token');
 
+            const payload = {
+                host: hostName,
+                service: serviceDescription,
+                hostId,
+                serviceId,
+                hostAddress
+            };
+
+            if (customComment) {
+                payload.comment = customComment;
+            }
+
             const response = await fetch(`${BASE_API_URL}/api/centreon/acknowledge`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    host: hostName,
-                    service: serviceDescription,
-                    hostId,
-                    serviceId
-                })
+                body: JSON.stringify(payload)
             });
 
             if (!response.ok) {
@@ -1215,7 +1244,13 @@ export default function Dashboard() {
         }
     };
 
-    const handleUnacknowledge = async (hostName, serviceDescription, hostId = null, serviceId = null) => {
+    const handleUnacknowledge = async (
+        hostName,
+        serviceDescription,
+        hostId = null,
+        serviceId = null,
+        hostAddress = null
+    ) => {
         const ackKey = getAckKey(hostName, serviceDescription, hostId, serviceId);
 
         try {
@@ -1237,7 +1272,8 @@ export default function Dashboard() {
                     host: hostName,
                     service: serviceDescription,
                     hostId,
-                    serviceId
+                    serviceId,
+                    hostAddress
                 })
             });
 
@@ -1274,7 +1310,7 @@ export default function Dashboard() {
         <div className="app-container">
             <aside className="sidebar">
                 <div className="logo">
-                    <img src={cevaLogo} alt="CEVA Logo" className="logo-image" />
+                    {cevaLogo}
                     <span className="logo-text">GOC Dashboard</span>
                 </div>
 
@@ -1381,34 +1417,34 @@ export default function Dashboard() {
                 {location.pathname === '/dashboard' && (
                     <div className="page active">
                         <div className="top-row">
-                            <div className="filter-section" style={{ width: '100%' }}>
-                                <div className="filter-controls-vertical">
-                                    <div className="filter-input-group">
+                            <div className="filter-section-compact">
+                                <div className="filter-controls-inline">
+                                    <div className="filter-input-group-compact">
                                         <label>HOST</label>
                                         <input
                                             type="text"
-                                            className="filter-input"
+                                            className="filter-input-compact"
                                             placeholder="Filter host..."
                                             value={filters.host}
                                             onChange={(e) => setFilters(f => ({ ...f, host: e.target.value }))}
                                         />
                                     </div>
 
-                                    <div className="filter-input-group">
+                                    <div className="filter-input-group-compact">
                                         <label>SERVICES</label>
                                         <input
                                             type="text"
-                                            className="filter-input"
+                                            className="filter-input-compact"
                                             placeholder="Filter service..."
                                             value={filters.service}
                                             onChange={(e) => setFilters(f => ({ ...f, service: e.target.value }))}
                                         />
                                     </div>
 
-                                    <div className="filter-input-group">
+                                    <div className="filter-input-group-compact">
                                         <label>POLLERS</label>
                                         <select
-                                            className="filter-select"
+                                            className="filter-select-compact"
                                             value={filters.poller}
                                             onChange={(e) => {
                                                 setFilters(f => ({ ...f, poller: e.target.value }));
@@ -1416,7 +1452,7 @@ export default function Dashboard() {
                                                 setServicePage(1);
                                             }}
                                         >
-                                            <option value="all">**NOT YET FUNCTIONING**</option>
+                                            <option value="all">All Pollers</option>
                                             {pollerDropdownList.map(name => (
                                                 <option key={name} value={name}>
                                                     {name}
@@ -1434,28 +1470,72 @@ export default function Dashboard() {
                                     <h2 className="section-title">
                                         {isSearchMode ? 'Search Results' : 'Active Exceptions'}
                                     </h2>
+                                </div>
 
+                                <div className="dashboard-pagination-controls-top">
                                     <span className="service-count">
-                                        {
-                                            dashboardGlobalListMode
-                                                ? (
-                                                    isLoadingDashboardGlobalList
-                                                        ? 'Loading...'
-                                                        : `${dashboardTableServices.length} of ${dashboardGlobalMeta.total || 0} Targets`
-                                                )
-                                                : (
-                                                    isLoadingServices
-                                                        ? 'Loading...'
-                                                        : `${dashboardTableServices.length} Targets`
-                                                )
+                                        {dashboardGlobalListMode
+                                            ? (
+                                                isLoadingDashboardGlobalList
+                                                    ? 'Loading...'
+                                                    : `${dashboardTableServices.length} of ${dashboardGlobalMeta.total || 0} Targets`
+                                            )
+                                            : (
+                                                isLoadingServices
+                                                    ? 'Loading...'
+                                                    : `${dashboardTableServices.length} Targets`
+                                            )
                                         }
-
                                         {dashboardGlobalListMode && (
                                             <>
                                                 {' '}| Global cache {isRefreshingGlobalSummary ? 'refreshing...' : 'cached'}
                                             </>
                                         )}
                                     </span>
+
+                                    <div className="dashboard-pagination-controls">
+                                        <span className="dashboard-pagination-label">Show:</span>
+                                        <select
+                                            className="dashboard-page-size-select"
+                                            value={serviceLimit}
+                                            onChange={handlePageSizeChange}
+                                            disabled={isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
+                                        >
+                                            <option value="10">10</option>
+                                            <option value="20">20</option>
+                                            <option value="30">30</option>
+                                            <option value="40">40</option>
+                                            <option value="50">50</option>
+                                            <option value="60">60</option>
+                                            <option value="70">70</option>
+                                            <option value="80">80</option>
+                                            <option value="90">90</option>
+                                            <option value="100">100</option>
+                                            <option value="999999">All</option>
+                                        </select>
+
+                                        <div className="dashboard-pagination-buttons">
+                                            <button
+                                                className="dashboard-page-btn"
+                                                onClick={() => goToPage(servicePage - 1)}
+                                                disabled={servicePage <= 1 || totalPages === 0 || isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
+                                            >
+                                                ◀ Prev
+                                            </button>
+
+                                            <span className="dashboard-page-info">
+                                                Page {totalPages === 0 ? 0 : servicePage} of {totalPages === 0 ? 0 : totalPages}
+                                            </span>
+
+                                            <button
+                                                className="dashboard-page-btn"
+                                                onClick={() => goToPage(servicePage + 1)}
+                                                disabled={servicePage >= totalPages || totalPages === 0 || isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
+                                            >
+                                                Next ▶
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -1492,150 +1572,92 @@ export default function Dashboard() {
                                             dashboardTableServices.map((service, idx) => {
                                                 const hostName = service.host?.name || service.host?.display_name;
                                                 const serviceDescription = service.description || service.display_name;
-                                                const ackKey = getAckKey(hostName,serviceDescription,service.host?.id,service.id);
+
+                                                const hostAddress =
+                                                    service.host?.address ||
+                                                    service.host?.ip ||
+                                                    service.host?.ip_address ||
+                                                    service.host?.address_ip ||
+                                                    extractIpFromText(service.output);
+
+                                                const ackKey = getAckKey(
+                                                    hostName,
+                                                    serviceDescription,
+                                                    service.host?.id,
+                                                    service.id
+                                                );
+
                                                 const acknowledged = isServiceAcknowledged(service);
-                                                
+
                                                 return (
-                                                <tr
-                                                    key={service.id || idx}
-                                                    className={acknowledged ? 'service-row-acknowledged' : ''}
-                                                >
-                                                    <td className="host-name">
-                                                        {hostName || 'N/A'}
-                                                        </td>
-                                                        
-                                                    <td className="service-name">
-                                                        {serviceDescription || 'N/A'}
-                                                    </td>
-                                                    
-                                                    <td className="service-output">
-                                                        {service.output || 'No output details provided.'}
-                                                    </td>
-                                                    
-                                                    <td>
-                                                        <span className={`status-text ${service.statusName?.toLowerCase()}`}>
-                                                            {service.statusName}
-                                                        </span>
-                                                    </td>
-                                                    
-                                                    <td className="ack-cell">
-                                                        {acknowledged ? (
-                                                            <button
-                                                                className="ack-badge ack-success-badge"
-                                                                disabled={unackInProgressIds.has(ackKey)}
-                                                                onClick={() => handleUnacknowledge(
-                                                                    hostName,
-                                                                    serviceDescription,
-                                                                    service.host?.id,
-                                                                    service.id
-                                                                )}
-                                                                title="Click to remove acknowledgement"
-                                                            >
-                                                                {unackInProgressIds.has(ackKey) ? 'REMOVING...' : 'ACKNOWLEDGED'}
-                                                            </button>
-                                                            
-                                                    ) : (
-                                                        <button
-                                                        className="ack-btn ack-action-btn"
-                                                        disabled={ackInProgressIds.has(ackKey)}
-                                                        onClick={() => handleAcknowledge(
-                                                            hostName,
-                                                            serviceDescription,
-                                                            service.host?.id,
-                                                            service.id
-                                                        )}
+                                                    <tr
+                                                        key={service.id || idx}
+                                                        className={
+                                                            acknowledged
+                                                                ? 'service-row-acknowledged'
+                                                                : `service-row-${service.statusName?.toLowerCase()}`
+                                                        }
                                                     >
-                                                        {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    );
-                                })
+                                                        <td className="host-name">
+                                                            {hostName || 'N/A'}
+                                                        </td>
+
+                                                        <td className="service-name">
+                                                            {serviceDescription || 'N/A'}
+                                                        </td>
+
+                                                        <td className="service-output">
+                                                            {service.output || 'No output details provided.'}
+                                                        </td>
+
+                                                        <td>
+                                                            <span className={`status-text ${service.statusName?.toLowerCase()}`}>
+                                                                {service.statusName}
+                                                            </span>
+                                                        </td>
+
+                                                        <td className="ack-cell">
+                                                            {acknowledged ? (
+                                                                <button
+                                                                    className="ack-badge ack-success-badge"
+                                                                    disabled={unackInProgressIds.has(ackKey)}
+                                                                    onClick={() => handleUnacknowledge(
+                                                                        hostName,
+                                                                        serviceDescription,
+                                                                        service.host?.id,
+                                                                        service.id,
+                                                                        hostAddress
+                                                                    )}
+                                                                    title="Click to remove acknowledgement"
+                                                                >
+                                                                    {unackInProgressIds.has(ackKey) ? 'REMOVING...' : 'ACKNOWLEDGED'}
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    className="ack-btn ack-action-btn"
+                                                                    disabled={ackInProgressIds.has(ackKey)}
+                                                                    onClick={() => {
+                                                                        setPendingAck({
+                                                                            hostName,
+                                                                            serviceDescription,
+                                                                            hostId: service.host?.id,
+                                                                            serviceId: service.id,
+                                                                            hostAddress
+                                                                        });
+                                                                        setAckComment('');
+                                                                        setShowAckModal(true);
+                                                                    }}
+                                                                >
+                                                                    {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
+                                                                </button>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
                                         )}
                                     </tbody>
                                 </table>
-                            </div>
-
-                            <div
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    gap: '16px',
-                                    marginTop: '16px',
-                                    flexWrap: 'wrap'
-                                }}
-                            >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <span>Page size:</span>
-                                    <select
-                                        className="filter-select"
-                                        value={serviceLimit}
-                                        onChange={handlePageSizeChange}
-                                        disabled={isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
-                                        style={{ width: '100px' }}
-                                    >
-                                        <option value={50}>50</option>
-                                        <option value={100}>100</option>
-                                        <option value={250}>250</option>
-                                        <option value={500}>500</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    Page {servicePage} of {totalPages}
-                                    {' '}| Total Services: {dashboardGlobalListMode ? (dashboardGlobalMeta.total || 0) : (serviceMeta.total || 0)}
-                                </div>
-
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <button
-                                        className="refresh-btn"
-                                        disabled={servicePage <= 1 || isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
-                                        onClick={() => goToPage(1)}
-                                    >
-                                        First
-                                    </button>
-
-                                    <button
-                                        className="refresh-btn"
-                                        disabled={servicePage <= 1 || isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
-                                        onClick={() => goToPage(servicePage - 1)}
-                                    >
-                                        Previous
-                                    </button>
-
-                                    {visiblePageNumbers.map(page => (
-                                        <button
-                                            key={page}
-                                            className="refresh-btn"
-                                            disabled={isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
-                                            onClick={() => goToPage(page)}
-                                            style={{
-                                                backgroundColor: page === servicePage ? '#238636' : undefined,
-                                                color: page === servicePage ? 'white' : undefined
-                                            }}
-                                        >
-                                            {page}
-                                        </button>
-                                    ))}
-
-                                    <button
-                                        className="refresh-btn"
-                                        disabled={servicePage >= totalPages || isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
-                                        onClick={() => goToPage(servicePage + 1)}
-                                    >
-                                        Next
-                                    </button>
-
-                                    <button
-                                        className="refresh-btn"
-                                        disabled={servicePage >= totalPages || isLoadingServices || (dashboardGlobalListMode && isLoadingDashboardGlobalList)}
-                                        onClick={() => goToPage(totalPages)}
-                                    >
-                                        Last
-                                    </button>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -1737,32 +1759,80 @@ export default function Dashboard() {
                                                 onClick={() => {
                                                     setSelectedPoller(null);
                                                     setSelectedPollerId(null);
-
                                                     setPollerHosts([]);
                                                     setPollerServices([]);
-
                                                     setPollerServiceCounts({
                                                         allActiveIssues: null,
                                                         critical: null,
                                                         warning: null,
                                                         unknown: null
                                                     });
-
                                                     setCurrentTableType('all');
                                                 }}
                                                 style={{ backgroundColor: '#21262d', color: '#c9d1d9' }}
                                             >
                                                 ⬅ Back to Pollers List
                                             </button>
-
                                             <h2>
                                                 Poller: <span style={{ color: '#58a6ff' }}>{selectedPoller}</span>
                                             </h2>
                                         </div>
 
-                                        <span className="service-count">
-                                            Active services from current host page
-                                        </span>
+                                        <div className="pollers-pagination-controls">
+                                            <div className="pollers-pagination-left">
+                                                <span className="pollers-pagination-info">
+                                                    Host Page {pollerHostMeta.page || pollerHostPage} of {pollerHostMeta.totalPages || 1}
+                                                    {' | '} Hosts: {pollerHostMeta.total || 0}
+                                                    {' | '} Active Services: {pollerServices.length}
+                                                </span>
+                                            </div>
+                                            <div className="pollers-pagination-right">
+                                                <span className="pollers-pagination-label">Show:</span>
+                                                <select
+                                                    className="pollers-page-size-select"
+                                                    value={pollerHostLimit}
+                                                    onChange={handlePollerPageSizeChange}
+                                                    disabled={isLoadingPollerHosts || isLoadingPollerServices}
+                                                >
+                                                    <option value="10">10</option>
+                                                    <option value="20">20</option>
+                                                    <option value="30">30</option>
+                                                    <option value="40">40</option>
+                                                    <option value="50">50</option>
+                                                    <option value="60">60</option>
+                                                    <option value="70">70</option>
+                                                    <option value="80">80</option>
+                                                    <option value="90">90</option>
+                                                    <option value="100">100</option>
+                                                    <option value="999999">All</option>
+                                                </select>
+                                                <div className="pollers-pagination-buttons">
+                                                    <button
+                                                        className="pollers-page-btn"
+                                                        onClick={() => {
+                                                            setPollerHostPage(prev => Math.max(prev - 1, 1));
+                                                            setCurrentTableType('all');
+                                                        }}
+                                                        disabled={pollerHostPage <= 1 || isLoadingPollerHosts || isLoadingPollerServices}
+                                                    >
+                                                        ◀ Prev
+                                                    </button>
+                                                    <span className="pollers-page-info">
+                                                        Page {pollerHostMeta.page || pollerHostPage} of {pollerHostMeta.totalPages || 1}
+                                                    </span>
+                                                    <button
+                                                        className="pollers-page-btn"
+                                                        onClick={() => {
+                                                            setPollerHostPage(prev => prev + 1);
+                                                            setCurrentTableType('all');
+                                                        }}
+                                                        disabled={pollerHostPage >= (pollerHostMeta.totalPages || 1) || isLoadingPollerHosts || isLoadingPollerServices}
+                                                    >
+                                                        Next ▶
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div className="table-wrapper">
@@ -1801,115 +1871,91 @@ export default function Dashboard() {
                                                         const hostName = service.host?.name || service.host?.display_name;
                                                         const serviceDescription = service.description || service.display_name;
 
+                                                        const hostAddress =
+                                                            service.host?.address ||
+                                                            service.host?.ip ||
+                                                            service.host?.ip_address ||
+                                                            service.host?.address_ip ||
+                                                            extractIpFromText(service.output);
+
                                                         const ackKey = getAckKey(
                                                             hostName,
                                                             serviceDescription,
                                                             service.host?.id,
                                                             service.id
                                                         );
+
                                                         const acknowledged = isServiceAcknowledged(service);
-                                                        
+
                                                         return (
-                                                        <tr
-                                                            key={service.id || idx}
-                                                            className={acknowledged ? 'service-row-acknowledged' : ''}
-                                                        >
-                                                            <td className="host-name">
-                                                                {hostName || 'N/A'}
+                                                            <tr
+                                                                key={service.id || idx}
+                                                                className={
+                                                                    acknowledged
+                                                                        ? 'service-row-acknowledged'
+                                                                        : `service-row-${service.statusName?.toLowerCase()}`
+                                                                }
+                                                            >
+                                                                <td className="host-name">
+                                                                    {hostName || 'N/A'}
                                                                 </td>
-                                                            
-                                                            <td className="service-name">
-                                                                {serviceDescription || 'N/A'}
-                                                            </td>
-                                                            
-                                                            <td className="service-output">
-                                                                {service.output || 'No output details provided.'}
-                                                            </td>
-                                                            
-                                                            <td>
-                                                                <span className={`status-text ${service.statusName?.toLowerCase()}`}>
-                                                                    {service.statusName}
-                                                                </span>
-                                                            </td>
-                                                            
-                                                            <td className="ack-cell">
-                                                                {acknowledged ? (
-                                            <button
-                                                className="ack-badge ack-success-badge"
-                                                disabled={unackInProgressIds.has(ackKey)}
-                                                onClick={() => handleUnacknowledge(
-                                                    hostName,
-                                                    serviceDescription,
-                                                    service.host?.id,
-                                                    service.id
-                                                )}
-                                                title="Click to remove acknowledgement"
-                                                >
-                                                    {unackInProgressIds.has(ackKey) ? 'REMOVING...' : 'ACKNOWLEDGED'}
-                                            </button>
-                                        ) : (
-                                            <button
-                                                className="ack-btn ack-action-btn"
-                                                disabled={ackInProgressIds.has(ackKey)}
-                                                onClick={() => handleAcknowledge(
-                                                    hostName,
-                                                    serviceDescription,
-                                                    service.host?.id,
-                                                    service.id
-                                                )}
-                                            >
-                                                {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
-                                            </button>
-                                        )}
-                                    </td>
-                                </tr>
-                            );
-                        })
+
+                                                                <td className="service-name">
+                                                                    {serviceDescription || 'N/A'}
+                                                                </td>
+
+                                                                <td className="service-output">
+                                                                    {service.output || 'No output details provided.'}
+                                                                </td>
+
+                                                                <td>
+                                                                    <span className={`status-text ${service.statusName?.toLowerCase()}`}>
+                                                                        {service.statusName}
+                                                                    </span>
+                                                                </td>
+
+                                                                <td className="ack-cell">
+                                                                    {acknowledged ? (
+                                                                        <button
+                                                                            className="ack-badge ack-success-badge"
+                                                                            disabled={unackInProgressIds.has(ackKey)}
+                                                                            onClick={() => handleUnacknowledge(
+                                                                                hostName,
+                                                                                serviceDescription,
+                                                                                service.host?.id,
+                                                                                service.id,
+                                                                                hostAddress
+                                                                            )}
+                                                                            title="Click to remove acknowledgement"
+                                                                        >
+                                                                            {unackInProgressIds.has(ackKey) ? 'REMOVING...' : 'ACKNOWLEDGED'}
+                                                                        </button>
+                                                                    ) : (
+                                                                        <button
+                                                                            className="ack-btn ack-action-btn"
+                                                                            disabled={ackInProgressIds.has(ackKey)}
+                                                                            onClick={() => {
+                                                                                setPendingAck({
+                                                                                    hostName,
+                                                                                    serviceDescription,
+                                                                                    hostId: service.host?.id,
+                                                                                    serviceId: service.id,
+                                                                                    hostAddress
+                                                                                });
+                                                                                setAckComment('');
+                                                                                setShowAckModal(true);
+                                                                            }}
+                                                                        >
+                                                                            {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
+                                                                        </button>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })
                                                 )}
                                             </tbody>
                                         </table>
-                                    </div>
-
-                                    <div
-                                        style={{
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center',
-                                            padding: '12px 20px',
-                                            borderTop: '1px solid #30363d',
-                                            flexWrap: 'wrap',
-                                            gap: '12px'
-                                        }}
-                                    >
-                                        <div className="table-count" style={{ padding: 0, borderTop: 'none' }}>
-                                            Host Page: {pollerHostMeta.page || pollerHostPage} of {pollerHostMeta.totalPages || 1}
-                                            {' '}| Hosts: {pollerHostMeta.total || 0}
-                                            {' '}| Active Services Loaded: {pollerServices.length}
-                                        </div>
-
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <button
-                                                className="refresh-btn"
-                                                disabled={pollerHostPage <= 1 || isLoadingPollerHosts || isLoadingPollerServices}
-                                                onClick={() => {
-                                                    setPollerHostPage(prev => Math.max(prev - 1, 1));
-                                                    setCurrentTableType('all');
-                                                }}
-                                            >
-                                                Previous
-                                            </button>
-
-                                            <button
-                                                className="refresh-btn"
-                                                disabled={pollerHostPage >= (pollerHostMeta.totalPages || 1) || isLoadingPollerHosts || isLoadingPollerServices}
-                                                onClick={() => {
-                                                    setPollerHostPage(prev => prev + 1);
-                                                    setCurrentTableType('all');
-                                                }}
-                                            >
-                                                Next
-                                            </button>
-                                        </div>
                                     </div>
                                 </>
                             )}
@@ -1919,6 +1965,83 @@ export default function Dashboard() {
 
                 {location.pathname === '/sla' && <Sla />}
                 {location.pathname === '/logs' && <Logs />}
+
+                {/* ============================================================ */}
+                {/* ACKNOWLEDGE MODAL                                            */}
+                {/* ============================================================ */}
+                {showAckModal && (
+                    <div
+                        className="modal-overlay"
+                        onClick={() => {
+                            setShowAckModal(false);
+                            setPendingAck(null);
+                            setAckComment('');
+                        }}
+                    >
+                        <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                            <h3 className="modal-title">Acknowledge Service</h3>
+
+                            <p className="modal-subtitle">
+                                <strong>Host:</strong> {pendingAck?.hostName || 'N/A'}
+                                <br />
+                                <strong>Service:</strong> {pendingAck?.serviceDescription || 'N/A'}
+                                <br />
+                                <strong>IP:</strong> {pendingAck?.hostAddress || 'N/A'}
+                            </p>
+
+                            <div className="modal-input-group">
+                                <label htmlFor="ackComment">Comment optional</label>
+                                <textarea
+                                    id="ackComment"
+                                    className="modal-textarea"
+                                    placeholder="Enter a comment for this acknowledgement..."
+                                    value={ackComment}
+                                    onChange={(e) => setAckComment(e.target.value)}
+                                    rows="4"
+                                />
+                            </div>
+
+                            <div className="modal-actions">
+                                <button
+                                    className="modal-btn modal-btn-cancel"
+                                    onClick={() => {
+                                        setShowAckModal(false);
+                                        setPendingAck(null);
+                                        setAckComment('');
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+
+                                <button
+                                    className="modal-btn modal-btn-confirm"
+                                    onClick={() => {
+                                        if (pendingAck) {
+                                            const comment =
+                                                ackComment.trim() ||
+                                                'Acknowledged from GOC Dashboard';
+
+                                            handleAcknowledge(
+                                                pendingAck.hostName,
+                                                pendingAck.serviceDescription,
+                                                pendingAck.hostId,
+                                                pendingAck.serviceId,
+                                                pendingAck.hostAddress,
+                                                comment
+                                            );
+                                        }
+
+                                        setShowAckModal(false);
+                                        setPendingAck(null);
+                                        setAckComment('');
+                                    }}
+                                >
+                                    Confirm Acknowledge
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </main>
         </div>
     );

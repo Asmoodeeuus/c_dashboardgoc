@@ -185,22 +185,42 @@ const getRequestUserName = (req) => {
         "Dashboard User"
     );
 };
-
-const getOrCreateAuditServerId = async (hostName) => {
+    const getOrCreateAuditServerId = async (hostName, hostAddress = null) => {
     const safeHostName = hostName || "Unknown Host";
+    const safeHostAddress = hostAddress || safeHostName;
 
     const [existingRows] = await db.execute(
-        `SELECT id FROM servers WHERE hostname = ? LIMIT 1`,
+        `SELECT id, ip_address FROM servers WHERE hostname = ? LIMIT 1`,
         [safeHostName]
     );
 
     if (existingRows.length > 0) {
-        return existingRows[0].id;
+        const existingServer = existingRows[0];
+
+        // Optional: if previous fallback was hostname/blank, update it with real IP.
+        if (
+            hostAddress &&
+            (
+                !existingServer.ip_address ||
+                existingServer.ip_address === safeHostName ||
+                existingServer.ip_address === "0.0.0.0"
+            )
+        ) {
+            await db.execute(
+                `UPDATE servers SET ip_address = ? WHERE id = ?`,
+                [hostAddress, existingServer.id]
+            );
+        }
+
+        return existingServer.id;
     }
 
     const [insertResult] = await db.execute(
-        `INSERT INTO servers (hostname) VALUES (?)`,
-        [safeHostName]
+        `
+        INSERT INTO servers (hostname, ip_address)
+        VALUES (?, ?)
+        `,
+        [safeHostName, safeHostAddress]
     );
 
     return insertResult.insertId;
@@ -208,6 +228,7 @@ const getOrCreateAuditServerId = async (hostName) => {
 
 const writeAuditLog = async ({
     host,
+    hostAddress,
     service,
     logType,
     oldStatus,
@@ -215,16 +236,16 @@ const writeAuditLog = async ({
     actionBy,
     message
 }) => {
-    const serverId = await getOrCreateAuditServerId(host);
-
+const serverId = await getOrCreateAuditServerId(host, hostAddress);
     const query = `
         INSERT INTO server_activity_log
-        (server_id, incident_id, log_type, old_status, new_status, action_by, message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (server_id, incident_id, service_name, log_type, old_status, new_status, action_by, message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    await db.execute(query, [
+    const [insertResult] = await db.execute(query, [
         serverId,
+        null,
         service || null,
         logType,
         oldStatus || null,
@@ -232,6 +253,11 @@ const writeAuditLog = async ({
         actionBy || "Dashboard User",
         message || null
     ]);
+
+    return {
+        serverId,
+        auditLogId: insertResult.insertId
+    };
 };
 
 // ============================================================
@@ -1647,6 +1673,7 @@ const acknowledgeService = async (req, res, next) => {
         service,
         hostName,
         serviceDescription,
+        hostAddress,
         comment
     } = req.body;
 
@@ -1713,9 +1740,15 @@ const acknowledgeService = async (req, res, next) => {
             actionBy
         });
 
+        let auditLogged = false;
+        let auditError = null;
+        let auditLogId = null;
+        let auditServerId = null;
+
         try {
-            await writeAuditLog({
+            const auditResult = await writeAuditLog({
                 host: targetHost,
+                hostAddress,
                 service: targetService,
                 logType: "ACKNOWLEDGEMENT",
                 oldStatus: null,
@@ -1723,18 +1756,28 @@ const acknowledgeService = async (req, res, next) => {
                 actionBy,
                 message: acknowledgeComment
             });
+
+            auditLogged = true;
+            auditLogId = auditResult.auditLogId;
+            auditServerId = auditResult.serverId;
+
         } catch (logError) {
-            console.error("Acknowledgement succeeded but audit log failed:", {
+            auditError = {
                 message: logError.message,
                 code: logError.code,
                 sqlMessage: logError.sqlMessage
-            });
+            };
+
+            console.error("Acknowledgement succeeded but audit log failed:", auditError);
         }
 
         return res.json({
             success: true,
             message: "Service acknowledged successfully.",
-            auditLogged: true,
+            auditLogged,
+            auditLogId,
+            auditServerId,
+            auditError,
             cachePatchedCount,
             resource: {
                 host: targetHost,
@@ -1780,6 +1823,7 @@ const unacknowledgeService = async (req, res, next) => {
     const {
         host,
         service,
+        hostAddress,
         hostName,
         serviceDescription
     } = req.body;
@@ -1830,9 +1874,15 @@ const unacknowledgeService = async (req, res, next) => {
             serviceDescription: targetService
         });
 
+        let auditLogged = false;
+        let auditError = null;
+        let auditLogId = null;
+        let auditServerId = null;
+
         try {
-            await writeAuditLog({
+            const auditResult = await writeAuditLog({
                 host: targetHost,
+                hostAddress,
                 service: targetService,
                 logType: "UNACKNOWLEDGEMENT",
                 oldStatus: "ACKNOWLEDGED",
@@ -1840,17 +1890,28 @@ const unacknowledgeService = async (req, res, next) => {
                 actionBy,
                 message: `Unacknowledged from GOC Dashboard by ${actionBy}`
             });
+
+            auditLogged = true;
+            auditLogId = auditResult.auditLogId;
+            auditServerId = auditResult.serverId;
+
         } catch (logError) {
-            console.error("Unacknowledgement succeeded but audit log failed:", {
+            auditError = {
                 message: logError.message,
                 code: logError.code,
                 sqlMessage: logError.sqlMessage
-            });
+            };
+
+            console.error("Unacknowledgement succeeded but audit log failed:", auditError);
         }
 
         return res.json({
             success: true,
             message: "Service unacknowledged successfully.",
+            auditLogged,
+            auditLogId,
+            auditServerId,
+            auditError,
             cachePatchedCount,
             resource: {
                 host: targetHost,
@@ -1889,12 +1950,12 @@ const unacknowledgeService = async (req, res, next) => {
         }
 
         return res.status(error.response?.status || 500).json({
-    success: false,
-    message: error.message || "Unacknowledge failed.",
-    status: error.response?.status,
-    data: error.response?.data,
-    debug: error.debug || null
-});
+            success: false,
+            message: error.message || "Unacknowledge failed.",
+            status: error.response?.status,
+            data: error.response?.data,
+            debug: error.debug || null
+        });
     }
 };
 

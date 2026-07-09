@@ -133,7 +133,8 @@ export default function Logs() {
                             <option value="critical">🔴 Critical</option>
                             <option value="warning">🟠 Warning</option>
                             <option value="unknown">⚪ Unknown</option>
-                            <option value="acknowledged">🟣 Acknowledged</option>
+                            <option value="acknowledged">🟢 Acknowledged</option>
+                            <option value="unacknowledged">⚪ Unacknowledged</option>
                         </select>
                     </div>
                     
