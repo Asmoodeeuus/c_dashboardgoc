@@ -59,7 +59,7 @@ export default function Dashboard() {
     const [ackInProgressIds, setAckInProgressIds] = useState(new Set());
     const [unackInProgressIds, setUnackInProgressIds] = useState(new Set());
 
-    // Prevent stale search requests from overwriting newer results.
+    // Prevent stale search/status requests from overwriting newer results.
     const dashboardGlobalListRequestIdRef = useRef(0);
     const dashboardSearchActiveRef = useRef(false);
 
@@ -166,10 +166,39 @@ export default function Dashboard() {
         return 'unknown';
     };
 
-    const buildServiceCounts = (services) => {
-        const critical = services.filter(service => service.statusCode === 2).length;
-        const warning = services.filter(service => service.statusCode === 1).length;
-        const unknown = services.filter(service => service.statusCode === 3).length;
+    const extractIpFromText = (text = '') => {
+        const match = String(text).match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+        return match ? match[0] : null;
+    };
+
+    const isServiceAcknowledged = useCallback((service) => {
+        const acknowledgement = service.acknowledgement;
+
+        return Boolean(
+            service.is_acknowledged === true ||
+            service.is_acknowledged === 1 ||
+            service.is_acknowledged === '1' ||
+            service.is_acknowledged === 'true' ||
+            service.acknowledged === true ||
+            service.acknowledged === 1 ||
+            service.acknowledged === '1' ||
+            service.acknowledged === 'true' ||
+            acknowledgement?.is_acknowledged === true ||
+            acknowledgement?.is_acknowledged === 1 ||
+            acknowledgement?.is_acknowledged === '1' ||
+            acknowledgement?.is_acknowledged === 'true' ||
+            Boolean(acknowledgement?.author) ||
+            Boolean(acknowledgement?.comment) ||
+            Boolean(acknowledgement?.entry_time)
+        );
+    }, []);
+
+    const buildServiceCounts = useCallback((services) => {
+        const unhandledServices = services.filter(service => !isServiceAcknowledged(service));
+
+        const critical = unhandledServices.filter(service => service.statusCode === 2).length;
+        const warning = unhandledServices.filter(service => service.statusCode === 1).length;
+        const unknown = unhandledServices.filter(service => service.statusCode === 3).length;
 
         return {
             allActiveIssues: critical + warning + unknown,
@@ -177,7 +206,7 @@ export default function Dashboard() {
             warning,
             unknown
         };
-    };
+    }, [isServiceAcknowledged]);
 
     // ============================================================
     // ROUTER RESET
@@ -235,16 +264,16 @@ export default function Dashboard() {
     }, [filters.service]);
 
     useEffect(() => {
-    dashboardSearchActiveRef.current =
-        location.pathname === '/dashboard' &&
-        filters.poller === 'all' &&
-        Boolean(debouncedHostSearch || debouncedServiceSearch);
-}, [
-    location.pathname,
-    filters.poller,
-    debouncedHostSearch,
-    debouncedServiceSearch
-]);
+        dashboardSearchActiveRef.current =
+            location.pathname === '/dashboard' &&
+            filters.poller === 'all' &&
+            Boolean(debouncedHostSearch || debouncedServiceSearch);
+    }, [
+        location.pathname,
+        filters.poller,
+        debouncedHostSearch,
+        debouncedServiceSearch
+    ]);
 
     // ============================================================
     // GLOBAL DASHBOARD SUMMARY FETCH
@@ -312,6 +341,15 @@ export default function Dashboard() {
         try {
             setIsLoadingDashboardGlobalList(true);
 
+            // Clear stale table data while switching cards/status.
+            setDashboardGlobalServices([]);
+            setDashboardGlobalMeta({
+                page,
+                limit,
+                total: 0,
+                totalPages: 1
+            });
+
             const token = localStorage.getItem('centreon_auth_token');
 
             const params = new URLSearchParams({
@@ -349,6 +387,27 @@ export default function Dashboard() {
 
             setIsRefreshingGlobalSummary(Boolean(payload.refreshing));
 
+            const rawResults = payload.data?.result || [];
+            const uniqueMap = new Map();
+
+            rawResults.forEach(service => {
+                const serviceKey = String(
+                    service.id ??
+                    service.service_id ??
+                    `${service.host?.id || service.host?.name || 'host'}-${service.description || service.display_name || 'service'}`
+                );
+
+                uniqueMap.set(serviceKey, service);
+            });
+
+            const uniqueResults = Array.from(uniqueMap.values());
+
+            const shouldRetryList =
+                payload.refreshing === true ||
+                payload.meta?.cacheRefreshing === true ||
+                payload.cached === false ||
+                payload.meta?.cacheLoaded === false;
+
             if (payload.cached) {
                 const hasSearch = Boolean(hostSearch || serviceSearch);
 
@@ -367,15 +426,16 @@ export default function Dashboard() {
                 }
             }
 
-            setDashboardGlobalServices(payload.data?.result || []);
+            setDashboardGlobalServices(uniqueResults);
+
             setDashboardGlobalMeta(payload.meta || {
                 page,
                 limit,
-                total: 0,
+                total: uniqueResults.length,
                 totalPages: 1
             });
 
-            if (payload.meta?.cacheRefreshing && !payload.meta?.cacheFresh) {
+            if (shouldRetryList) {
                 setTimeout(() => {
                     if (isLatestRequest()) {
                         fetchDashboardGlobalServiceList(
@@ -504,20 +564,15 @@ export default function Dashboard() {
                 setCachedSearchResults([]);
             }
 
-            const criticalCount = summaryPayload.counts?.critical ?? criticals.length;
-            const warningCount = summaryPayload.counts?.warning ?? warnings.length;
-            const unknownCount = summaryPayload.counts?.unknown ?? unknowns.length;
-
-            const allActiveIssues =
-                summaryPayload.counts?.allActiveIssues ??
-                summaryPayload.counts?.allServices ??
-                criticalCount + warningCount + unknownCount;
+            const unhandledCritical = criticals.filter(service => !isServiceAcknowledged(service)).length;
+            const unhandledWarning = warnings.filter(service => !isServiceAcknowledged(service)).length;
+            const unhandledUnknown = unknowns.filter(service => !isServiceAcknowledged(service)).length;
 
             setCounts({
-                allActiveIssues,
-                critical: criticalCount,
-                warning: warningCount,
-                unknown: unknownCount
+                allActiveIssues: unhandledCritical + unhandledWarning + unhandledUnknown,
+                critical: unhandledCritical,
+                warning: unhandledWarning,
+                unknown: unhandledUnknown
             });
 
             setServiceMeta(
@@ -555,7 +610,8 @@ export default function Dashboard() {
         debouncedServiceSearch,
         servicePage,
         serviceLimit,
-        fetchGlobalDashboardSummary
+        fetchGlobalDashboardSummary,
+        isServiceAcknowledged
     ]);
 
     // ============================================================
@@ -600,12 +656,6 @@ export default function Dashboard() {
             }));
 
             setCachedPollers(mappedPollers);
-
-            if (payload.meta?.hostCountRefreshing && !payload.meta?.hostCountLoaded) {
-                setTimeout(() => {
-                    fetchPollersRoster();
-                }, 5000);
-            }
 
         } catch (error) {
             console.error('Error fetching pollers roster:', error);
@@ -694,7 +744,7 @@ export default function Dashboard() {
         } finally {
             setIsLoadingPollerServices(false);
         }
-    }, []);
+    }, [buildServiceCounts]);
 
     const fetchPollerHosts = useCallback(async (pollerId, page = 1, limit = pollerHostLimit) => {
         try {
@@ -911,9 +961,20 @@ export default function Dashboard() {
         }
 
         if (activePollerContext !== 'all') {
-            const critical = cachedCritical.filter(s => s.poller_name === activePollerContext).length;
-            const warning = cachedWarning.filter(s => s.poller_name === activePollerContext).length;
-            const unknown = cachedUnknown.filter(s => s.poller_name === activePollerContext).length;
+            const critical = cachedCritical.filter(s =>
+                s.poller_name === activePollerContext &&
+                !isServiceAcknowledged(s)
+            ).length;
+
+            const warning = cachedWarning.filter(s =>
+                s.poller_name === activePollerContext &&
+                !isServiceAcknowledged(s)
+            ).length;
+
+            const unknown = cachedUnknown.filter(s =>
+                s.poller_name === activePollerContext &&
+                !isServiceAcknowledged(s)
+            ).length;
 
             return {
                 allActiveIssues: critical + warning + unknown,
@@ -933,7 +994,8 @@ export default function Dashboard() {
         counts,
         cachedCritical,
         cachedWarning,
-        cachedUnknown
+        cachedUnknown,
+        isServiceAcknowledged
     ]);
 
     const isSearchMode = Boolean(debouncedHostSearch || debouncedServiceSearch);
@@ -977,7 +1039,9 @@ export default function Dashboard() {
                 filters.poller === 'all' ||
                 item.poller_name === filters.poller;
 
-            return matchHost && matchService && matchPoller;
+            const matchUnhandled = !isServiceAcknowledged(item);
+
+            return matchHost && matchService && matchPoller && matchUnhandled;
         });
     }, [
         isSearchMode,
@@ -987,19 +1051,21 @@ export default function Dashboard() {
         cachedCritical,
         cachedWarning,
         cachedUnknown,
-        filters
+        filters,
+        isServiceAcknowledged
     ]);
 
     const dashboardTableServices = useMemo(() => {
-        if (dashboardGlobalListMode) {
-            return dashboardGlobalServices;
-        }
+        const source = dashboardGlobalListMode
+            ? dashboardGlobalServices
+            : filteredServices;
 
-        return filteredServices;
+        return source.filter(service => !isServiceAcknowledged(service));
     }, [
         dashboardGlobalListMode,
         dashboardGlobalServices,
-        filteredServices
+        filteredServices,
+        isServiceAcknowledged
     ]);
 
     const filteredPollerServices = useMemo(() => {
@@ -1053,11 +1119,6 @@ export default function Dashboard() {
         setPollerHostPage(1);
     };
 
-    const extractIpFromText = (text = '') => {
-        const match = String(text).match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
-        return match ? match[0] : null;
-    };
-
     // ============================================================
     // ACKNOWLEDGMENT / UNACKNOWLEDGMENT / LOGOUT
     // ============================================================
@@ -1065,28 +1126,6 @@ export default function Dashboard() {
         return String(
             serviceId ??
             `${hostId || ''}-${hostName || ''}-${serviceDescription || ''}`
-        );
-    };
-
-    const isServiceAcknowledged = (service) => {
-        const acknowledgement = service.acknowledgement;
-
-        return Boolean(
-            service.is_acknowledged === true ||
-            service.is_acknowledged === 1 ||
-            service.is_acknowledged === '1' ||
-            service.is_acknowledged === 'true' ||
-            service.acknowledged === true ||
-            service.acknowledged === 1 ||
-            service.acknowledged === '1' ||
-            service.acknowledged === 'true' ||
-            acknowledgement?.is_acknowledged === true ||
-            acknowledgement?.is_acknowledged === 1 ||
-            acknowledgement?.is_acknowledged === '1' ||
-            acknowledgement?.is_acknowledged === 'true' ||
-            Boolean(acknowledgement?.author) ||
-            Boolean(acknowledgement?.comment) ||
-            Boolean(acknowledgement?.entry_time)
         );
     };
 
@@ -1379,7 +1418,9 @@ export default function Dashboard() {
                         <div
                             className={`stat-card all ${currentTableType === 'all' ? 'active' : ''}`}
                             onClick={() => {
+                                setDashboardGlobalServices([]);
                                 setCurrentTableType('all');
+
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(true);
@@ -1393,7 +1434,9 @@ export default function Dashboard() {
                         <div
                             className={`stat-card critical ${currentTableType === 'critical' ? 'active' : ''}`}
                             onClick={() => {
+                                setDashboardGlobalServices([]);
                                 setCurrentTableType('critical');
+
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(false);
@@ -1407,7 +1450,9 @@ export default function Dashboard() {
                         <div
                             className={`stat-card warning ${currentTableType === 'warning' ? 'active' : ''}`}
                             onClick={() => {
+                                setDashboardGlobalServices([]);
                                 setCurrentTableType('warning');
+
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(false);
@@ -1421,7 +1466,9 @@ export default function Dashboard() {
                         <div
                             className={`stat-card unknown ${currentTableType === 'unknown' ? 'active' : ''}`}
                             onClick={() => {
+                                setDashboardGlobalServices([]);
                                 setCurrentTableType('unknown');
+
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(false);
@@ -1567,7 +1614,7 @@ export default function Dashboard() {
                                             <th>Service</th>
                                             <th>Output Summary</th>
                                             <th>Status</th>
-                                            <th>Acknowledged</th>
+                                            <th>Acknowledge</th>
                                         </tr>
                                     </thead>
 
@@ -1579,12 +1626,12 @@ export default function Dashboard() {
                                                         ? (
                                                             isLoadingDashboardGlobalList
                                                                 ? 'Loading services...'
-                                                                : 'No active issues found matching current criteria.'
+                                                                : 'No unhandled active issues found matching current criteria.'
                                                         )
                                                         : (
                                                             isLoadingServices
                                                                 ? 'Loading services...'
-                                                                : 'No active issues found matching current criteria.'
+                                                                : 'No unhandled active issues found matching current criteria.'
                                                         )}
                                                 </td>
                                             </tr>
@@ -1607,16 +1654,10 @@ export default function Dashboard() {
                                                     service.id
                                                 );
 
-                                                const acknowledged = isServiceAcknowledged(service);
-
                                                 return (
                                                     <tr
-                                                        key={service.id || idx}
-                                                        className={
-                                                            acknowledged
-                                                                ? 'service-row-acknowledged'
-                                                                : `service-row-${service.statusName?.toLowerCase()}`
-                                                        }
+                                                        key={`${service.host?.id || service.host?.name || 'host'}-${service.id || service.description || idx}`}
+                                                        className={`service-row-${service.statusName?.toLowerCase()}`}
                                                     >
                                                         <td className="host-name">
                                                             {hostName || 'N/A'}
@@ -1637,40 +1678,23 @@ export default function Dashboard() {
                                                         </td>
 
                                                         <td className="ack-cell">
-                                                            {acknowledged ? (
-                                                                <button
-                                                                    className="ack-badge ack-success-badge"
-                                                                    disabled={unackInProgressIds.has(ackKey)}
-                                                                    onClick={() => handleUnacknowledge(
+                                                            <button
+                                                                className="ack-btn ack-action-btn"
+                                                                disabled={ackInProgressIds.has(ackKey)}
+                                                                onClick={() => {
+                                                                    setPendingAck({
                                                                         hostName,
                                                                         serviceDescription,
-                                                                        service.host?.id,
-                                                                        service.id,
+                                                                        hostId: service.host?.id,
+                                                                        serviceId: service.id,
                                                                         hostAddress
-                                                                    )}
-                                                                    title="Click to remove acknowledgement"
-                                                                >
-                                                                    {unackInProgressIds.has(ackKey) ? 'REMOVING...' : 'ACKNOWLEDGED'}
-                                                                </button>
-                                                            ) : (
-                                                                <button
-                                                                    className="ack-btn ack-action-btn"
-                                                                    disabled={ackInProgressIds.has(ackKey)}
-                                                                    onClick={() => {
-                                                                        setPendingAck({
-                                                                            hostName,
-                                                                            serviceDescription,
-                                                                            hostId: service.host?.id,
-                                                                            serviceId: service.id,
-                                                                            hostAddress
-                                                                        });
-                                                                        setAckComment('');
-                                                                        setShowAckModal(true);
-                                                                    }}
-                                                                >
-                                                                    {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
-                                                                </button>
-                                                            )}
+                                                                    });
+                                                                    setAckComment('');
+                                                                    setShowAckModal(true);
+                                                                }}
+                                                            >
+                                                                {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
+                                                            </button>
                                                         </td>
                                                     </tr>
                                                 );
@@ -1909,7 +1933,7 @@ export default function Dashboard() {
 
                                                         return (
                                                             <tr
-                                                                key={service.id || idx}
+                                                                key={`${service.host?.id || service.host?.name || 'host'}-${service.id || service.description || idx}`}
                                                                 className={
                                                                     acknowledged
                                                                         ? 'service-row-acknowledged'
@@ -1986,9 +2010,6 @@ export default function Dashboard() {
                 {location.pathname === '/sla' && <Sla />}
                 {location.pathname === '/logs' && <Logs />}
 
-                {/* ============================================================ */}
-                {/* ACKNOWLEDGE MODAL                                            */}
-                {/* ============================================================ */}
                 {showAckModal && (
                     <div
                         className="modal-overlay"

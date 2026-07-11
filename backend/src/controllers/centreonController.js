@@ -139,6 +139,33 @@ const normalizeService = (service) => {
     };
 };
 
+const isUnhandledActiveService = (service) => {
+    const isActiveIssue =
+        service.statusCode === 1 ||
+        service.statusCode === 2 ||
+        service.statusCode === 3;
+
+    const isAcknowledged = Boolean(
+        service.is_acknowledged === true ||
+        service.is_acknowledged === 1 ||
+        service.is_acknowledged === "1" ||
+        service.is_acknowledged === "true" ||
+        service.acknowledged === true ||
+        service.acknowledged === 1 ||
+        service.acknowledged === "1" ||
+        service.acknowledged === "true" ||
+        service.acknowledgement?.is_acknowledged === true ||
+        service.acknowledgement?.is_acknowledged === 1 ||
+        service.acknowledgement?.is_acknowledged === "1" ||
+        service.acknowledgement?.is_acknowledged === "true" ||
+        Boolean(service.acknowledgement?.author) ||
+        Boolean(service.acknowledgement?.comment) ||
+        Boolean(service.acknowledgement?.entry_time)
+    );
+
+    return isActiveIssue && !isAcknowledged;
+};
+
 const buildServicesEndpoint = ({ page = 1, limit = 100, search = null }) => {
     const params = new URLSearchParams({
         page: String(page),
@@ -739,9 +766,15 @@ const refreshDashboardGlobalSummaryCache = async (req) => {
             const normalizedServices = services.map(normalizeService);
 
             normalizedServices.forEach((service) => {
-                if (service.statusCode === 2) criticalServices.push(service);
-                else if (service.statusCode === 1) warningServices.push(service);
-                else if (service.statusCode === 3) unknownServices.push(service);
+                if (!isUnhandledActiveService(service)) {
+                    return;}
+                if (service.statusCode === 2) {
+                    criticalServices.push(service);
+                } else if (service.statusCode === 1) {
+                    warningServices.push(service);
+                } else if (service.statusCode === 3) {
+                    unknownServices.push(service);
+                }
             });
 
             totalFromCentreon =
