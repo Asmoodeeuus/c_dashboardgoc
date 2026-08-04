@@ -1589,6 +1589,220 @@ const getGlobalServiceStatusSummary = async (req, res, next) => {
     }
 };
 
+const getGlobalServiceFilterOptions = async (req, res, next) => {
+    try {
+        const requestedType = String(req.query.type || "all")
+            .trim()
+            .toLowerCase();
+
+        const allowedTypes = new Set([
+            "all",
+            "critical",
+            "warning",
+            "unknown"
+        ]);
+
+        const type = allowedTypes.has(requestedType)
+            ? requestedType
+            : "all";
+
+        const statusFilter = normalizeStatusFilter(
+            req.query.statusFilter
+        );
+
+        const poller = String(req.query.poller || "")
+            .trim()
+            .toLowerCase();
+
+        const hostSearch = String(req.query.host || "")
+            .trim()
+            .toLowerCase();
+
+        const serviceSearch = String(req.query.service || "")
+            .trim()
+            .toLowerCase();
+
+        const now = Date.now();
+        const cacheLoaded = Boolean(
+            dashboardGlobalSummaryCache.updatedAt
+        );
+        const cacheFresh = Boolean(
+            dashboardGlobalSummaryCache.updatedAt &&
+            now - dashboardGlobalSummaryCache.updatedAt <
+                DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+        );
+
+        if (!cacheFresh && !dashboardGlobalSummaryCache.isRefreshing) {
+            refreshDashboardGlobalSummaryCache(req);
+        }
+
+        if (!cacheLoaded) {
+            return res.json({
+                success: true,
+                cached: false,
+                refreshing: dashboardGlobalSummaryCache.isRefreshing,
+                type,
+                statusFilter,
+                query: {
+                    poller,
+                    host: hostSearch,
+                    service: serviceSearch
+                },
+                options: {
+                    hosts: [],
+                    services: []
+                },
+                meta: {
+                    hostCount: 0,
+                    serviceCount: 0,
+                    cacheLoaded: false,
+                    cacheFresh: false,
+                    cacheRefreshing:
+                        dashboardGlobalSummaryCache.isRefreshing,
+                    cacheUpdatedAt:
+                        dashboardGlobalSummaryCache.updatedAt,
+                    cacheTtlMs:
+                        DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+                }
+            });
+        }
+
+        let services = filterServicesByHandlingStatus(
+            getDashboardCachedActiveServices(),
+            statusFilter
+        );
+
+        if (type === "critical") {
+            services = services.filter(
+                (service) => Number(service.statusCode) === 2
+            );
+        } else if (type === "warning") {
+            services = services.filter(
+                (service) => Number(service.statusCode) === 1
+            );
+        } else if (type === "unknown") {
+            services = services.filter(
+                (service) => Number(service.statusCode) === 3
+            );
+        }
+
+        if (poller && poller !== "all") {
+            services = services.filter((service) => {
+                const pollerName = String(
+                    service.poller_name ||
+                    service.host?.poller_name ||
+                    (service.host?.poller_id
+                        ? `Poller ${service.host.poller_id}`
+                        : "Default Poller")
+                ).trim().toLowerCase();
+
+                return pollerName === poller;
+            });
+        }
+
+        const getHostOption = (service) => String(
+            service.host?.name ||
+            service.host?.display_name ||
+            service.host?.alias ||
+            ""
+        ).trim();
+
+        const getServiceOption = (service) => String(
+            service.description ||
+            service.display_name ||
+            service.service_name ||
+            ""
+        ).trim();
+
+        const matchesHostSearch = (service) => {
+            if (!hostSearch) return true;
+
+            const hostName = String(
+                service.host?.name || ""
+            ).toLowerCase();
+            const hostDisplayName = String(
+                service.host?.display_name || ""
+            ).toLowerCase();
+            const hostAlias = String(
+                service.host?.alias || ""
+            ).toLowerCase();
+
+            return (
+                hostName.includes(hostSearch) ||
+                hostDisplayName.includes(hostSearch) ||
+                hostAlias.includes(hostSearch)
+            );
+        };
+
+        const matchesServiceSearch = (service) => {
+            if (!serviceSearch) return true;
+
+            const description = String(
+                service.description || ""
+            ).toLowerCase();
+            const displayName = String(
+                service.display_name || ""
+            ).toLowerCase();
+
+            return (
+                description.includes(serviceSearch) ||
+                displayName.includes(serviceSearch)
+            );
+        };
+
+        // Host choices are narrowed by the current service search.
+        // Service choices are narrowed by the current host search.
+        const hostOptions = [
+            ...new Set(
+                services
+                    .filter(matchesServiceSearch)
+                    .map(getHostOption)
+                    .filter(Boolean)
+            )
+        ].sort((a, b) => a.localeCompare(b));
+
+        const serviceOptions = [
+            ...new Set(
+                services
+                    .filter(matchesHostSearch)
+                    .map(getServiceOption)
+                    .filter(Boolean)
+            )
+        ].sort((a, b) => a.localeCompare(b));
+
+        return res.json({
+            success: true,
+            cached: true,
+            refreshing: dashboardGlobalSummaryCache.isRefreshing,
+            type,
+            statusFilter,
+            query: {
+                poller,
+                host: hostSearch,
+                service: serviceSearch
+            },
+            options: {
+                hosts: hostOptions,
+                services: serviceOptions
+            },
+            meta: {
+                hostCount: hostOptions.length,
+                serviceCount: serviceOptions.length,
+                cacheLoaded: true,
+                cacheFresh,
+                cacheRefreshing:
+                    dashboardGlobalSummaryCache.isRefreshing,
+                cacheUpdatedAt:
+                    dashboardGlobalSummaryCache.updatedAt,
+                cacheTtlMs:
+                    DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+            }
+        });
+    } catch (error) {
+        return handleCentreonError(error, res, next);
+    }
+};
+
 const getGlobalServiceStatusSummaryList = async (req, res, next) => {
     try {
         const requestedType = String(req.query.type || "all")
@@ -2627,6 +2841,7 @@ module.exports = {
     getServiceStatusSummary,
     getGlobalServiceStatusSummary,
     getGlobalServiceStatusSummaryList,
+    getGlobalServiceFilterOptions,
     acknowledgeService,
     unacknowledgeService,
     testMonitoringServers,

@@ -7,6 +7,196 @@ import cevaLogo from "../assets/CEVA.png";
 
 const BASE_API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
+const FilterCombobox = ({
+    label,
+    value,
+    options,
+    onChange,
+    placeholder,
+    loading = false
+}) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [highlightedIndex, setHighlightedIndex] = useState(-1);
+    const containerRef = useRef(null);
+    const inputRef = useRef(null);
+
+    const filteredOptions = useMemo(() => {
+        const search = String(value || "").trim().toLowerCase();
+        const uniqueOptions = [...new Set(options || [])];
+
+        if (!search) {
+            return uniqueOptions;
+        }
+
+        return uniqueOptions.filter((option) =>
+            String(option).toLowerCase().includes(search)
+        );
+    }, [options, value]);
+
+    useEffect(() => {
+        const handleOutsideClick = (event) => {
+            if (
+                containerRef.current &&
+                !containerRef.current.contains(event.target)
+            ) {
+                setIsOpen(false);
+                setHighlightedIndex(-1);
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => {
+            document.removeEventListener('mousedown', handleOutsideClick);
+        };
+    }, []);
+
+    useEffect(() => {
+        setHighlightedIndex(-1);
+    }, [value, options]);
+
+    const selectOption = (option) => {
+        onChange(option);
+        setIsOpen(false);
+        setHighlightedIndex(-1);
+        inputRef.current?.focus();
+    };
+
+    const clearValue = () => {
+        onChange('');
+        setIsOpen(true);
+        setHighlightedIndex(-1);
+        inputRef.current?.focus();
+    };
+
+    const handleKeyDown = (event) => {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setIsOpen(true);
+            setHighlightedIndex((current) =>
+                Math.min(current + 1, filteredOptions.length - 1)
+            );
+            return;
+        }
+
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setHighlightedIndex((current) => Math.max(current - 1, -1));
+            return;
+        }
+
+        if (event.key === 'Enter' && isOpen) {
+            if (highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
+                event.preventDefault();
+                selectOption(filteredOptions[highlightedIndex]);
+            }
+            return;
+        }
+
+        if (event.key === 'Escape') {
+            setIsOpen(false);
+            setHighlightedIndex(-1);
+        }
+    };
+
+    return (
+        <div
+            className="issue-filter-combobox"
+            ref={containerRef}
+        >
+            <div className="issue-filter-input-wrapper">
+                <input
+                    ref={inputRef}
+                    type="text"
+                    className="filter-input-compact issue-filter-input"
+                    placeholder={placeholder}
+                    value={value}
+                    onChange={(event) => {
+                        onChange(event.target.value);
+                        setIsOpen(true);
+                    }}
+                    onFocus={() => setIsOpen(true)}
+                    onClick={() => setIsOpen(true)}
+                    onKeyDown={handleKeyDown}
+                    autoComplete="off"
+                    role="combobox"
+                    aria-label={`${label} issue filter`}
+                    aria-expanded={isOpen}
+                    aria-autocomplete="list"
+                />
+
+                {value && (
+                    <button
+                        type="button"
+                        className="issue-filter-clear"
+                        onClick={clearValue}
+                        aria-label={`Clear ${label} filter`}
+                    >
+                        x
+                    </button>
+                )}
+
+                <button
+                    type="button"
+                    className="issue-filter-toggle"
+                    onClick={() => {
+                        setIsOpen((current) => !current);
+                        inputRef.current?.focus();
+                    }}
+                    aria-label={`Toggle ${label} suggestions`}
+                    tabIndex={-1}
+                >
+                    v
+                </button>
+            </div>
+
+            {isOpen && (
+                <div
+                    className="issue-filter-dropdown"
+                    role="listbox"
+                >
+                    <button
+                        type="button"
+                        className={`issue-filter-option issue-filter-option-all ${
+                            !value ? 'selected' : ''
+                        }`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={clearValue}
+                    >
+                        All {label}s
+                    </button>
+
+                    {loading ? (
+                        <div className="issue-filter-message">
+                            Loading {label.toLowerCase()} options...
+                        </div>
+                    ) : filteredOptions.length === 0 ? (
+                        <div className="issue-filter-message">
+                            No matching {label.toLowerCase()} with an active issue.
+                        </div>
+                    ) : (
+                        filteredOptions.map((option, index) => (
+                            <button
+                                type="button"
+                                key={option}
+                                role="option"
+                                aria-selected={value === option}
+                                className={`issue-filter-option ${
+                                    index === highlightedIndex ? 'highlighted' : ''
+                                } ${value === option ? 'selected' : ''}`}
+                                onMouseEnter={() => setHighlightedIndex(index)}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => selectOption(option)}
+                            >
+                                {option}
+                            </button>
+                        ))
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const DataCenterContent = ({
     groups,
     counts,
@@ -448,6 +638,13 @@ export default function Dashboard() {
     // Prevent stale search/status requests from overwriting newer results.
     const dashboardGlobalListRequestIdRef = useRef(0);
     const dashboardSearchActiveRef = useRef(false);
+    const [serviceFilterOptions, setServiceFilterOptions] = useState({
+        hosts: [],
+        services: []
+    });
+    const [isLoadingServiceFilterOptions, setIsLoadingServiceFilterOptions] = useState(false);
+    const serviceFilterOptionsRequestIdRef = useRef(0);
+    const serviceFilterOptionsRetryTimerRef = useRef(null);
 
     const [cachedCritical, setCachedCritical] = useState([]);
     const [cachedWarning, setCachedWarning] = useState([]);
@@ -1465,6 +1662,110 @@ export default function Dashboard() {
 
     useEffect(() => {
         if (!dashboardGlobalListMode) {
+            serviceFilterOptionsRequestIdRef.current += 1;
+            setIsLoadingServiceFilterOptions(false);
+            return;
+        }
+
+        const requestId = serviceFilterOptionsRequestIdRef.current + 1;
+        serviceFilterOptionsRequestIdRef.current = requestId;
+        const isLatestRequest = () =>
+            serviceFilterOptionsRequestIdRef.current === requestId;
+
+        if (serviceFilterOptionsRetryTimerRef.current) {
+            clearTimeout(serviceFilterOptionsRetryTimerRef.current);
+            serviceFilterOptionsRetryTimerRef.current = null;
+        }
+
+        const loadFilterOptions = async (background = false) => {
+            try {
+                if (!background && isLatestRequest()) {
+                    setIsLoadingServiceFilterOptions(true);
+                }
+
+                const token = localStorage.getItem('centreon_auth_token');
+                const params = new URLSearchParams({
+                    type: currentTableType,
+                    statusFilter,
+                    poller: filters.poller,
+                    host: debouncedHostSearch,
+                    service: debouncedServiceSearch
+                });
+
+                const response = await fetch(
+                    `${BASE_API_URL}/api/centreon/services/status/global-summary/options?${params.toString()}`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    }
+                );
+
+                const payload = await response.json().catch(() => null);
+
+                if (!response.ok) {
+                    throw new Error(
+                        payload?.message ||
+                        `Filter options request failed with HTTP ${response.status}`
+                    );
+                }
+
+                if (!isLatestRequest()) return;
+
+                setServiceFilterOptions({
+                    hosts: Array.isArray(payload?.options?.hosts)
+                        ? payload.options.hosts
+                        : [],
+                    services: Array.isArray(payload?.options?.services)
+                        ? payload.options.services
+                        : []
+                });
+
+                const shouldRetry =
+                    payload?.cached === false ||
+                    payload?.meta?.cacheLoaded === false ||
+                    payload?.meta?.cacheRefreshing === true;
+
+                if (shouldRetry) {
+                    serviceFilterOptionsRetryTimerRef.current = setTimeout(
+                        () => {
+                            if (isLatestRequest()) {
+                                loadFilterOptions(true);
+                            }
+                        },
+                        10000
+                    );
+                }
+            } catch (error) {
+                if (!isLatestRequest()) return;
+                console.error('Error loading service filter options:', error);
+            } finally {
+                if (!background && isLatestRequest()) {
+                    setIsLoadingServiceFilterOptions(false);
+                }
+            }
+        };
+
+        loadFilterOptions();
+
+        return () => {
+            serviceFilterOptionsRequestIdRef.current += 1;
+            if (serviceFilterOptionsRetryTimerRef.current) {
+                clearTimeout(serviceFilterOptionsRetryTimerRef.current);
+                serviceFilterOptionsRetryTimerRef.current = null;
+            }
+        };
+    }, [
+        dashboardGlobalListMode,
+        currentTableType,
+        statusFilter,
+        filters.poller,
+        debouncedHostSearch,
+        debouncedServiceSearch
+    ]);
+
+    useEffect(() => {
+        if (!dashboardGlobalListMode) {
             dashboardGlobalListRequestIdRef.current += 1;
             setIsLoadingDashboardGlobalList(false);
         }
@@ -2221,23 +2522,37 @@ export default function Dashboard() {
                                 <div className="filter-controls-inline">
                                     <div className="filter-input-group-compact">
                                         <label>HOST</label>
-                                        <input
-                                            type="text"
-                                            className="filter-input-compact"
-                                            placeholder="Filter host..."
+                                        <FilterCombobox
+                                            label="Host"
                                             value={filters.host}
-                                            onChange={(e) => setFilters(f => ({ ...f, host: e.target.value }))}
+                                            options={serviceFilterOptions.hosts}
+                                            loading={isLoadingServiceFilterOptions}
+                                            placeholder="Filter host..."
+                                            onChange={(value) => {
+                                                setFilters((current) => ({
+                                                    ...current,
+                                                    host: value
+                                                }));
+                                                setServicePage(1);
+                                            }}
                                         />
                                     </div>
 
                                     <div className="filter-input-group-compact">
                                         <label>SERVICES</label>
-                                        <input
-                                            type="text"
-                                            className="filter-input-compact"
-                                            placeholder="Filter service..."
+                                        <FilterCombobox
+                                            label="Service"
                                             value={filters.service}
-                                            onChange={(e) => setFilters(f => ({ ...f, service: e.target.value }))}
+                                            options={serviceFilterOptions.services}
+                                            loading={isLoadingServiceFilterOptions}
+                                            placeholder="Filter service..."
+                                            onChange={(value) => {
+                                                setFilters((current) => ({
+                                                    ...current,
+                                                    service: value
+                                                }));
+                                                setServicePage(1);
+                                            }}
                                         />
                                     </div>
 
