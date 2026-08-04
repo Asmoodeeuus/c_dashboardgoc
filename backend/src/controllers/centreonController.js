@@ -94,20 +94,14 @@ const getStatusNameFromCode = (statusCode) => {
     }
 };
 
-const normalizeService = (service) => {
-    const statusCode = Number(service.status?.code ?? service.state);
-
-    const statusName = String(
-        service.status?.name || getStatusNameFromCode(statusCode)
-    ).toUpperCase();
-
+const isServiceAcknowledged = (service) => {
     const acknowledgement =
         service.acknowledgement ||
         service.acknowledgements ||
         service.ack ||
         null;
 
-    const isAcknowledged = Boolean(
+    return Boolean(
         service.is_acknowledged === true ||
         service.is_acknowledged === 1 ||
         service.is_acknowledged === "1" ||
@@ -124,46 +118,124 @@ const normalizeService = (service) => {
         Boolean(acknowledgement?.comment) ||
         Boolean(acknowledgement?.entry_time)
     );
+};
 
-    return {
+const normalizeService = (service) => {
+    const statusCode = Number(
+        service.statusCode ??
+        service.status?.code ??
+        service.state
+    );
+
+    const statusName = String(
+        service.statusName ||
+        service.status?.name ||
+        getStatusNameFromCode(statusCode)
+    ).toUpperCase();
+
+    const acknowledgement =
+        service.acknowledgement ||
+        service.acknowledgements ||
+        service.ack ||
+        null;
+
+    const normalizedService = {
         ...service,
         statusCode,
         statusName,
-        is_acknowledged: isAcknowledged,
-        acknowledged: isAcknowledged,
-        acknowledgement: acknowledgement || service.acknowledgement || null,
+        acknowledgement,
         poller_name:
             service.poller_name ||
             service.host?.poller_name ||
-            (service.host?.poller_id ? `Poller ${service.host.poller_id}` : "Default Poller")
+            (service.host?.poller_id
+                ? `Poller ${service.host.poller_id}`
+                : "Default Poller")
+    };
+
+    const acknowledged = isServiceAcknowledged(normalizedService);
+
+    return {
+        ...normalizedService,
+        is_acknowledged: acknowledged,
+        acknowledged
     };
 };
 
+const isActiveIssueService = (service) => {
+    return [1, 2, 3].includes(Number(service.statusCode));
+};
+
 const isUnhandledActiveService = (service) => {
-    const isActiveIssue =
-        service.statusCode === 1 ||
-        service.statusCode === 2 ||
-        service.statusCode === 3;
-
-    const isAcknowledged = Boolean(
-        service.is_acknowledged === true ||
-        service.is_acknowledged === 1 ||
-        service.is_acknowledged === "1" ||
-        service.is_acknowledged === "true" ||
-        service.acknowledged === true ||
-        service.acknowledged === 1 ||
-        service.acknowledged === "1" ||
-        service.acknowledged === "true" ||
-        service.acknowledgement?.is_acknowledged === true ||
-        service.acknowledgement?.is_acknowledged === 1 ||
-        service.acknowledgement?.is_acknowledged === "1" ||
-        service.acknowledgement?.is_acknowledged === "true" ||
-        Boolean(service.acknowledgement?.author) ||
-        Boolean(service.acknowledgement?.comment) ||
-        Boolean(service.acknowledgement?.entry_time)
+    return (
+        isActiveIssueService(service) &&
+        !isServiceAcknowledged(service)
     );
+};
 
-    return isActiveIssue && !isAcknowledged;
+const isAcknowledgedActiveService = (service) => {
+    return (
+        isActiveIssueService(service) &&
+        isServiceAcknowledged(service)
+    );
+};
+
+const getDashboardCachedActiveServices = () => {
+    return [
+        ...(dashboardGlobalSummaryCache.services.critical || []),
+        ...(dashboardGlobalSummaryCache.services.warning || []),
+        ...(dashboardGlobalSummaryCache.services.unknown || [])
+    ];
+};
+
+const normalizeStatusFilter = (value) => {
+    const requestedFilter = String(value || "unhandled")
+        .trim()
+        .toLowerCase();
+
+    const allowedFilters = new Set([
+        "unhandled",
+        "acknowledged",
+        "all"
+    ]);
+
+    return allowedFilters.has(requestedFilter)
+        ? requestedFilter
+        : "unhandled";
+};
+
+const filterServicesByHandlingStatus = (services, statusFilter) => {
+    const normalizedFilter = normalizeStatusFilter(statusFilter);
+
+    if (normalizedFilter === "acknowledged") {
+        return services.filter(isAcknowledgedActiveService);
+    }
+
+    if (normalizedFilter === "all") {
+        return services.filter(isActiveIssueService);
+    }
+
+    return services.filter(isUnhandledActiveService);
+};
+
+const buildStatusCounts = (services) => {
+    const critical = services.filter(
+        (service) => Number(service.statusCode) === 2
+    ).length;
+
+    const warning = services.filter(
+        (service) => Number(service.statusCode) === 1
+    ).length;
+
+    const unknown = services.filter(
+        (service) => Number(service.statusCode) === 3
+    ).length;
+
+    return {
+        allActiveIssues: critical + warning + unknown,
+        critical,
+        warning,
+        unknown
+    };
 };
 
 const buildServicesEndpoint = ({ page = 1, limit = 100, search = null }) => {
@@ -291,6 +363,22 @@ const serverId = await getOrCreateAuditServerId(host, hostAddress);
 // ACK / UNACK CACHE HELPERS
 // ============================================================
 
+const recalculateDashboardGlobalCounts = () => {
+    const allActiveServices = getDashboardCachedActiveServices();
+    const unhandledServices = filterServicesByHandlingStatus(
+        allActiveServices,
+        "unhandled"
+    );
+    const updatedCounts = buildStatusCounts(unhandledServices);
+
+    dashboardGlobalSummaryCache = {
+        ...dashboardGlobalSummaryCache,
+        counts: updatedCounts
+    };
+
+    return updatedCounts;
+};
+
 const markDashboardCachedServiceAsAcknowledged = ({
     hostId,
     serviceId,
@@ -300,6 +388,14 @@ const markDashboardCachedServiceAsAcknowledged = ({
     actionBy
 }) => {
     let patchedCount = 0;
+
+    const targetHostName = String(
+        hostName || ""
+    ).trim().toLowerCase();
+
+    const targetServiceDescription = String(
+        serviceDescription || ""
+    ).trim().toLowerCase();
 
     const patchService = (service) => {
         const currentServiceId =
@@ -317,33 +413,42 @@ const markDashboardCachedServiceAsAcknowledged = ({
             service.host?.display_name ||
             service.host_name ||
             ""
-        ).toLowerCase();
+        ).trim().toLowerCase();
 
         const currentServiceDescription = String(
             service.description ||
             service.display_name ||
             service.service_name ||
             ""
-        ).toLowerCase();
-
-        const targetHostName = String(hostName || "").toLowerCase();
-        const targetServiceDescription = String(serviceDescription || "").toLowerCase();
+        ).trim().toLowerCase();
 
         let isMatch = false;
 
-        if (serviceId !== undefined && serviceId !== null) {
-            isMatch = String(currentServiceId) === String(serviceId);
-        } else if (hostId !== undefined && hostId !== null) {
+        if (
+            serviceId !== undefined &&
+            serviceId !== null
+        ) {
+            isMatch =
+                String(currentServiceId) ===
+                String(serviceId);
+        } else if (
+            hostId !== undefined &&
+            hostId !== null
+        ) {
             isMatch =
                 String(currentHostId) === String(hostId) &&
-                currentServiceDescription === targetServiceDescription;
+                currentServiceDescription ===
+                    targetServiceDescription;
         } else {
             isMatch =
                 currentHostName === targetHostName &&
-                currentServiceDescription === targetServiceDescription;
+                currentServiceDescription ===
+                    targetServiceDescription;
         }
 
-        if (!isMatch) return service;
+        if (!isMatch) {
+            return service;
+        }
 
         patchedCount += 1;
 
@@ -352,12 +457,18 @@ const markDashboardCachedServiceAsAcknowledged = ({
             is_acknowledged: true,
             acknowledged: true,
             acknowledgement: {
-                ...(typeof service.acknowledgement === "object" && !Array.isArray(service.acknowledgement)
-                    ? service.acknowledgement
-                    : {}),
+                ...(
+                    typeof service.acknowledgement === "object" &&
+                    service.acknowledgement !== null &&
+                    !Array.isArray(service.acknowledgement)
+                        ? service.acknowledgement
+                        : {}
+                ),
                 is_acknowledged: true,
                 author: actionBy || "Dashboard User",
-                comment: comment || "Acknowledged from GOC Dashboard",
+                comment:
+                    comment ||
+                    "Acknowledged from GOC Dashboard",
                 entry_time: new Date().toISOString()
             }
         };
@@ -366,18 +477,30 @@ const markDashboardCachedServiceAsAcknowledged = ({
     dashboardGlobalSummaryCache = {
         ...dashboardGlobalSummaryCache,
         services: {
-            critical: (dashboardGlobalSummaryCache.services.critical || []).map(patchService),
-            warning: (dashboardGlobalSummaryCache.services.warning || []).map(patchService),
-            unknown: (dashboardGlobalSummaryCache.services.unknown || []).map(patchService)
+            critical: (
+                dashboardGlobalSummaryCache.services.critical || []
+            ).map(patchService),
+
+            warning: (
+                dashboardGlobalSummaryCache.services.warning || []
+            ).map(patchService),
+
+            unknown: (
+                dashboardGlobalSummaryCache.services.unknown || []
+            ).map(patchService)
         }
     };
+
+    const updatedCounts =
+        recalculateDashboardGlobalCounts();
 
     console.log("Dashboard ACK cache patch result:", {
         patchedCount,
         hostId,
         serviceId,
         hostName,
-        serviceDescription
+        serviceDescription,
+        updatedCounts
     });
 
     return patchedCount;
@@ -391,6 +514,14 @@ const markDashboardCachedServiceAsUnacknowledged = ({
 }) => {
     let patchedCount = 0;
 
+    const targetHostName = String(
+        hostName || ""
+    ).trim().toLowerCase();
+
+    const targetServiceDescription = String(
+        serviceDescription || ""
+    ).trim().toLowerCase();
+
     const patchService = (service) => {
         const currentServiceId =
             service.id ??
@@ -407,33 +538,42 @@ const markDashboardCachedServiceAsUnacknowledged = ({
             service.host?.display_name ||
             service.host_name ||
             ""
-        ).toLowerCase();
+        ).trim().toLowerCase();
 
         const currentServiceDescription = String(
             service.description ||
             service.display_name ||
             service.service_name ||
             ""
-        ).toLowerCase();
-
-        const targetHostName = String(hostName || "").toLowerCase();
-        const targetServiceDescription = String(serviceDescription || "").toLowerCase();
+        ).trim().toLowerCase();
 
         let isMatch = false;
 
-        if (serviceId !== undefined && serviceId !== null) {
-            isMatch = String(currentServiceId) === String(serviceId);
-        } else if (hostId !== undefined && hostId !== null) {
+        if (
+            serviceId !== undefined &&
+            serviceId !== null
+        ) {
+            isMatch =
+                String(currentServiceId) ===
+                String(serviceId);
+        } else if (
+            hostId !== undefined &&
+            hostId !== null
+        ) {
             isMatch =
                 String(currentHostId) === String(hostId) &&
-                currentServiceDescription === targetServiceDescription;
+                currentServiceDescription ===
+                    targetServiceDescription;
         } else {
             isMatch =
                 currentHostName === targetHostName &&
-                currentServiceDescription === targetServiceDescription;
+                currentServiceDescription ===
+                    targetServiceDescription;
         }
 
-        if (!isMatch) return service;
+        if (!isMatch) {
+            return service;
+        }
 
         patchedCount += 1;
 
@@ -448,18 +588,30 @@ const markDashboardCachedServiceAsUnacknowledged = ({
     dashboardGlobalSummaryCache = {
         ...dashboardGlobalSummaryCache,
         services: {
-            critical: (dashboardGlobalSummaryCache.services.critical || []).map(patchService),
-            warning: (dashboardGlobalSummaryCache.services.warning || []).map(patchService),
-            unknown: (dashboardGlobalSummaryCache.services.unknown || []).map(patchService)
+            critical: (
+                dashboardGlobalSummaryCache.services.critical || []
+            ).map(patchService),
+
+            warning: (
+                dashboardGlobalSummaryCache.services.warning || []
+            ).map(patchService),
+
+            unknown: (
+                dashboardGlobalSummaryCache.services.unknown || []
+            ).map(patchService)
         }
     };
+
+    const updatedCounts =
+        recalculateDashboardGlobalCounts();
 
     console.log("Dashboard UNACK cache patch result:", {
         patchedCount,
         hostId,
         serviceId,
         hostName,
-        serviceDescription
+        serviceDescription,
+        updatedCounts
     });
 
     return patchedCount;
@@ -739,7 +891,9 @@ const refreshPollerHostCountCache = async (req, monitoringServerMap) => {
 };
 
 const refreshDashboardGlobalSummaryCache = async (req) => {
-    if (dashboardGlobalSummaryCache.isRefreshing) return;
+    if (dashboardGlobalSummaryCache.isRefreshing) {
+        return;
+    }
 
     dashboardGlobalSummaryCache.isRefreshing = true;
 
@@ -756,7 +910,10 @@ const refreshDashboardGlobalSummaryCache = async (req) => {
         while (true) {
             const endpoint = buildServicesEndpoint({ page, limit });
 
-            console.log("Centreon dashboard global summary cache URL:", endpoint);
+            console.log(
+                "Centreon dashboard global summary cache URL:",
+                endpoint
+            );
 
             const response = await centreonAxios.get(endpoint, {
                 headers: getCentreonHeaders(req)
@@ -766,8 +923,10 @@ const refreshDashboardGlobalSummaryCache = async (req) => {
             const normalizedServices = services.map(normalizeService);
 
             normalizedServices.forEach((service) => {
-                if (!isUnhandledActiveService(service)) {
-                    return;}
+                if (!isActiveIssueService(service)) {
+                    return;
+                }
+
                 if (service.statusCode === 2) {
                     criticalServices.push(service);
                 } else if (service.statusCode === 1) {
@@ -778,27 +937,38 @@ const refreshDashboardGlobalSummaryCache = async (req) => {
             });
 
             totalFromCentreon =
-                response.data?.meta?.total ||
+                Number(response.data?.meta?.total) ||
                 services.length;
 
             counted += services.length;
 
-            if (counted >= totalFromCentreon || services.length === 0) break;
+            if (counted >= totalFromCentreon || services.length === 0) {
+                break;
+            }
+
             page += 1;
         }
 
-        const allActiveIssues =
-            criticalServices.length +
-            warningServices.length +
-            unknownServices.length;
+        const allActiveServices = [
+            ...criticalServices,
+            ...warningServices,
+            ...unknownServices
+        ];
+
+        const unhandledServices = filterServicesByHandlingStatus(
+            allActiveServices,
+            "unhandled"
+        );
+
+        const acknowledgedServices = filterServicesByHandlingStatus(
+            allActiveServices,
+            "acknowledged"
+        );
+
+        const unhandledCounts = buildStatusCounts(unhandledServices);
 
         dashboardGlobalSummaryCache = {
-            counts: {
-                allActiveIssues,
-                critical: criticalServices.length,
-                warning: warningServices.length,
-                unknown: unknownServices.length
-            },
+            counts: unhandledCounts,
             services: {
                 critical: criticalServices,
                 warning: warningServices,
@@ -811,12 +981,16 @@ const refreshDashboardGlobalSummaryCache = async (req) => {
 
         console.log("Dashboard global summary cache refreshed:", {
             totalServicesScanned: counted,
-            allActiveIssues,
-            critical: criticalServices.length,
-            warning: warningServices.length,
-            unknown: unknownServices.length
+            totalActiveServicesCached: allActiveServices.length,
+            totalUnhandledServices: unhandledServices.length,
+            totalAcknowledgedServices: acknowledgedServices.length,
+            cachedByStatus: {
+                critical: criticalServices.length,
+                warning: warningServices.length,
+                unknown: unknownServices.length
+            },
+            unhandledCounts
         });
-
     } catch (error) {
         console.error("Failed refreshing dashboard global summary cache:", {
             status: error.response?.status,
@@ -1417,23 +1591,55 @@ const getGlobalServiceStatusSummary = async (req, res, next) => {
 
 const getGlobalServiceStatusSummaryList = async (req, res, next) => {
     try {
-        const type = String(req.query.type || "all").toLowerCase();
-        const page = Number(req.query.page) || 1;
-        const limit = Number(req.query.limit) || 100;
+        const requestedType = String(req.query.type || "all")
+            .trim()
+            .toLowerCase();
 
-        const hostSearch = String(req.query.host || "").trim().toLowerCase();
-        const serviceSearch = String(req.query.service || "").trim().toLowerCase();
-        const qSearch = String(req.query.q || "").trim().toLowerCase();
+        const allowedTypes = new Set([
+            "all",
+            "critical",
+            "warning",
+            "unknown"
+        ]);
+
+        const type = allowedTypes.has(requestedType)
+            ? requestedType
+            : "all";
+
+        const statusFilter = normalizeStatusFilter(
+            req.query.statusFilter
+        );
+
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.min(
+            999999,
+            Math.max(1, Number(req.query.limit) || 100)
+        );
+
+        const hostSearch = String(req.query.host || "")
+            .trim()
+            .toLowerCase();
+
+        const serviceSearch = String(req.query.service || "")
+            .trim()
+            .toLowerCase();
+
+        const qSearch = String(req.query.q || "")
+            .trim()
+            .toLowerCase();
 
         const now = Date.now();
 
-        const hasCachedCounts =
+        const hasCachedCounts = Boolean(
             dashboardGlobalSummaryCache.updatedAt &&
-            dashboardGlobalSummaryCache.counts.allActiveIssues !== null;
+            dashboardGlobalSummaryCache.counts.allActiveIssues !== null
+        );
 
-        const hasFreshCache =
+        const hasFreshCache = Boolean(
             dashboardGlobalSummaryCache.updatedAt &&
-            now - dashboardGlobalSummaryCache.updatedAt < DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS;
+            now - dashboardGlobalSummaryCache.updatedAt <
+                DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+        );
 
         if (!hasFreshCache && !dashboardGlobalSummaryCache.isRefreshing) {
             refreshDashboardGlobalSummaryCache(req);
@@ -1445,54 +1651,62 @@ const getGlobalServiceStatusSummaryList = async (req, res, next) => {
                 cached: false,
                 refreshing: dashboardGlobalSummaryCache.isRefreshing,
                 type,
+                statusFilter,
                 query: {
                     host: hostSearch,
                     service: serviceSearch,
                     q: qSearch
                 },
-                counts: dashboardGlobalSummaryCache.counts,
+                counts: {
+                    allActiveIssues: 0,
+                    critical: 0,
+                    warning: 0,
+                    unknown: 0
+                },
                 filteredCounts: {
                     allActiveIssues: 0,
                     critical: 0,
                     warning: 0,
                     unknown: 0
                 },
-                data: {
-                    result: []
-                },
+                data: { result: [] },
                 meta: {
                     page,
                     limit,
                     total: 0,
                     totalPages: 1,
+                    filteredTotal: 0,
                     cacheLoaded: false,
                     cacheFresh: false,
                     cacheRefreshing: dashboardGlobalSummaryCache.isRefreshing,
-                    cacheUpdatedAt: dashboardGlobalSummaryCache.updatedAt
+                    cacheUpdatedAt: dashboardGlobalSummaryCache.updatedAt,
+                    cacheTtlMs: DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
                 }
             });
         }
 
-        const criticalServices = dashboardGlobalSummaryCache.services.critical || [];
-        const warningServices = dashboardGlobalSummaryCache.services.warning || [];
-        const unknownServices = dashboardGlobalSummaryCache.services.unknown || [];
+        const allActiveServices = getDashboardCachedActiveServices();
+        const handlingFilteredServices = filterServicesByHandlingStatus(
+            allActiveServices,
+            statusFilter
+        );
 
-        const allActiveServices = [
-            ...criticalServices,
-            ...warningServices,
-            ...unknownServices
-        ];
-
-        let filteredAllStatusServices = allActiveServices;
+        const counts = buildStatusCounts(handlingFilteredServices);
+        let searchedServices = handlingFilteredServices;
 
         if (hostSearch || serviceSearch || qSearch) {
-            filteredAllStatusServices = allActiveServices.filter((service) => {
+            searchedServices = handlingFilteredServices.filter((service) => {
                 const hostName = String(service.host?.name || "").toLowerCase();
-                const hostDisplayName = String(service.host?.display_name || "").toLowerCase();
+                const hostDisplayName = String(
+                    service.host?.display_name || ""
+                ).toLowerCase();
                 const hostAlias = String(service.host?.alias || "").toLowerCase();
-
-                const serviceDescription = String(service.description || "").toLowerCase();
-                const serviceDisplayName = String(service.display_name || "").toLowerCase();
+                const serviceDescription = String(
+                    service.description || ""
+                ).toLowerCase();
+                const serviceDisplayName = String(
+                    service.display_name || ""
+                ).toLowerCase();
                 const output = String(service.output || "").toLowerCase();
 
                 const matchesHost =
@@ -1520,57 +1734,397 @@ const getGlobalServiceStatusSummaryList = async (req, res, next) => {
             });
         }
 
-        const filteredCritical = filteredAllStatusServices.filter(service => service.statusCode === 2);
-        const filteredWarning = filteredAllStatusServices.filter(service => service.statusCode === 1);
-        const filteredUnknown = filteredAllStatusServices.filter(service => service.statusCode === 3);
+        const filteredCounts = buildStatusCounts(searchedServices);
 
-        const filteredCounts = {
-            allActiveIssues: filteredCritical.length + filteredWarning.length + filteredUnknown.length,
-            critical: filteredCritical.length,
-            warning: filteredWarning.length,
-            unknown: filteredUnknown.length
-        };
+        let selectedServices;
 
-        let selectedServices = [];
-
-        if (type === "critical") selectedServices = filteredCritical;
-        else if (type === "warning") selectedServices = filteredWarning;
-        else if (type === "unknown") selectedServices = filteredUnknown;
-        else selectedServices = filteredAllStatusServices;
+        if (type === "critical") {
+            selectedServices = searchedServices.filter(
+                (service) => Number(service.statusCode) === 2
+            );
+        } else if (type === "warning") {
+            selectedServices = searchedServices.filter(
+                (service) => Number(service.statusCode) === 1
+            );
+        } else if (type === "unknown") {
+            selectedServices = searchedServices.filter(
+                (service) => Number(service.statusCode) === 3
+            );
+        } else {
+            selectedServices = searchedServices;
+        }
 
         const startIndex = (page - 1) * limit;
-        const pagedServices = selectedServices.slice(startIndex, startIndex + limit);
+        const pagedServices = selectedServices.slice(
+            startIndex,
+            startIndex + limit
+        );
+
+        const unhandledTotal = allActiveServices.filter(
+            isUnhandledActiveService
+        ).length;
+
+        const acknowledgedTotal = allActiveServices.filter(
+            isAcknowledgedActiveService
+        ).length;
 
         return res.json({
             success: true,
             cached: true,
             refreshing: dashboardGlobalSummaryCache.isRefreshing,
             type,
+            statusFilter,
             query: {
                 host: hostSearch,
                 service: serviceSearch,
                 q: qSearch
             },
-            counts: dashboardGlobalSummaryCache.counts,
+            counts,
             filteredCounts,
-            data: {
-                result: pagedServices
-            },
+            data: { result: pagedServices },
             meta: {
                 page,
                 limit,
                 total: selectedServices.length,
-                totalPages: Math.max(1, Math.ceil(selectedServices.length / limit)),
-                filteredTotal: filteredAllStatusServices.length,
+                totalPages: Math.max(
+                    1,
+                    Math.ceil(selectedServices.length / limit)
+                ),
+                filteredTotal: searchedServices.length,
                 cacheLoaded: true,
-                cacheFresh: Boolean(hasFreshCache),
+                cacheFresh: hasFreshCache,
                 cacheRefreshing: dashboardGlobalSummaryCache.isRefreshing,
                 cacheUpdatedAt: dashboardGlobalSummaryCache.updatedAt,
-                cacheTtlMs: DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+                cacheTtlMs: DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS,
+                totalActiveServicesCached: allActiveServices.length,
+                totalUnhandledServices: unhandledTotal,
+                totalAcknowledgedServices: acknowledgedTotal
             }
         });
-
     } catch (error) {
+        return handleCentreonError(error, res, next);
+    }
+};
+
+// ============================================================
+// DATA CENTER - HOST GROUPS WITH ISSUE COUNTS
+// ============================================================
+
+const getDataCenterHostGroups = async (req, res, next) => {
+    try {
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.min(
+            1000,
+            Math.max(1, Number(req.query.limit) || 20)
+        );
+
+        const statusFilter = normalizeStatusFilter(
+            req.query.statusFilter
+        );
+
+        const search = String(req.query.search || "")
+            .trim()
+            .toLowerCase();
+
+        const includeHosts = ![
+            "false",
+            "0",
+            "no"
+        ].includes(
+            String(req.query.includeHosts ?? "true")
+                .trim()
+                .toLowerCase()
+        );
+
+        const now = Date.now();
+        const cacheLoaded = Boolean(dashboardGlobalSummaryCache.updatedAt);
+        const cacheFresh = Boolean(
+            dashboardGlobalSummaryCache.updatedAt &&
+            now - dashboardGlobalSummaryCache.updatedAt <
+                DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+        );
+
+        if (!cacheFresh && !dashboardGlobalSummaryCache.isRefreshing) {
+            refreshDashboardGlobalSummaryCache(req);
+        }
+
+        if (!cacheLoaded) {
+            return res.json({
+                success: true,
+                cached: false,
+                refreshing: dashboardGlobalSummaryCache.isRefreshing,
+                statusFilter,
+                query: { search, includeHosts },
+                counts: {
+                    hostGroups: 0,
+                    uniqueHosts: 0,
+                    hostsWithIssues: 0,
+                    allActiveIssues: 0,
+                    critical: 0,
+                    warning: 0,
+                    unknown: 0
+                },
+                data: { result: [] },
+                meta: {
+                    page,
+                    limit,
+                    total: 0,
+                    totalPages: 1,
+                    cacheLoaded: false,
+                    cacheFresh: false,
+                    cacheRefreshing: dashboardGlobalSummaryCache.isRefreshing,
+                    cacheUpdatedAt: dashboardGlobalSummaryCache.updatedAt,
+                    cacheTtlMs: DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS
+                }
+            });
+        }
+
+        const allActiveServices = getDashboardCachedActiveServices();
+        const selectedServices = filterServicesByHandlingStatus(
+            allActiveServices,
+            statusFilter
+        );
+
+        const hostIssueMap = new Map();
+
+        selectedServices.forEach((service) => {
+            const hostId =
+                service.host?.id ??
+                service.host?.host_id ??
+                service.host_id;
+
+            if (hostId === undefined || hostId === null) {
+                return;
+            }
+
+            const hostKey = String(hostId);
+
+            if (!hostIssueMap.has(hostKey)) {
+                hostIssueMap.set(hostKey, {
+                    critical: 0,
+                    warning: 0,
+                    unknown: 0,
+                    allActiveIssues: 0
+                });
+            }
+
+            const hostCounts = hostIssueMap.get(hostKey);
+
+            if (Number(service.statusCode) === 2) {
+                hostCounts.critical += 1;
+            } else if (Number(service.statusCode) === 1) {
+                hostCounts.warning += 1;
+            } else if (Number(service.statusCode) === 3) {
+                hostCounts.unknown += 1;
+            }
+
+            hostCounts.allActiveIssues =
+                hostCounts.critical +
+                hostCounts.warning +
+                hostCounts.unknown;
+        });
+
+        const centreonPageLimit = 1000;
+        let centreonPage = 1;
+        let fetchedGroups = 0;
+        let totalGroupsFromCentreon = 0;
+        const allHostGroups = [];
+
+        while (true) {
+            const params = new URLSearchParams({
+                page: String(centreonPage),
+                limit: String(centreonPageLimit),
+                show_host: "true"
+            });
+
+            const endpoint = `/monitoring/hostgroups?${params.toString()}`;
+            console.log("Centreon Data Center host groups URL:", endpoint);
+
+            const response = await centreonAxios.get(endpoint, {
+                headers: getCentreonHeaders(req)
+            });
+
+            const groups = response.data?.result || [];
+            totalGroupsFromCentreon =
+                Number(response.data?.meta?.total) ||
+                groups.length;
+
+            allHostGroups.push(...groups);
+            fetchedGroups += groups.length;
+
+            if (
+                fetchedGroups >= totalGroupsFromCentreon ||
+                groups.length === 0
+            ) {
+                break;
+            }
+
+            centreonPage += 1;
+        }
+
+        const zeroCounts = () => ({
+            allActiveIssues: 0,
+            critical: 0,
+            warning: 0,
+            unknown: 0
+        });
+
+        let summaries = allHostGroups.map((group) => {
+            const rawHosts = Array.isArray(group.hosts)
+                ? group.hosts
+                : Array.isArray(group.host)
+                    ? group.host
+                    : [];
+
+            const groupCounts = zeroCounts();
+            let hostsWithIssues = 0;
+
+            const hosts = rawHosts.map((host) => {
+                const hostId = host.id ?? host.host_id;
+                const counts =
+                    hostIssueMap.get(String(hostId)) ||
+                    zeroCounts();
+
+                if (counts.allActiveIssues > 0) {
+                    hostsWithIssues += 1;
+                }
+
+                groupCounts.critical += counts.critical;
+                groupCounts.warning += counts.warning;
+                groupCounts.unknown += counts.unknown;
+                groupCounts.allActiveIssues += counts.allActiveIssues;
+
+                return {
+                    id: hostId,
+                    name: host.name || "",
+                    alias: host.alias || "",
+                    display_name:
+                        host.display_name ||
+                        host.name ||
+                        "",
+                    state: host.state ?? null,
+                    counts: { ...counts }
+                };
+            });
+
+            const result = {
+                id: group.id ?? group.hostgroup_id,
+                name:
+                    group.name ||
+                    group.alias ||
+                    `Host Group ${group.id ?? group.hostgroup_id ?? ""}`,
+                alias: group.alias || "",
+                hostCount: rawHosts.length,
+                hostsWithIssues,
+                counts: groupCounts
+            };
+
+            if (includeHosts) {
+                result.hosts = hosts;
+            }
+
+            return result;
+        });
+
+        if (search) {
+            summaries = summaries.filter((group) => {
+                const groupName = String(group.name || "").toLowerCase();
+                const groupAlias = String(group.alias || "").toLowerCase();
+                return (
+                    groupName.includes(search) ||
+                    groupAlias.includes(search)
+                );
+            });
+        }
+
+        summaries.sort((a, b) => {
+            if (b.counts.critical !== a.counts.critical) {
+                return b.counts.critical - a.counts.critical;
+            }
+            if (b.counts.allActiveIssues !== a.counts.allActiveIssues) {
+                return b.counts.allActiveIssues - a.counts.allActiveIssues;
+            }
+            return String(a.name).localeCompare(String(b.name));
+        });
+
+        const filteredGroupTotal = summaries.length;
+        const startIndex = (page - 1) * limit;
+        const pagedSummaries = summaries.slice(
+            startIndex,
+            startIndex + limit
+        );
+
+        const uniqueHostIds = new Set();
+        summaries.forEach((group) => {
+            const originalGroup = allHostGroups.find(
+                (item) =>
+                    String(item.id ?? item.hostgroup_id) ===
+                    String(group.id)
+            );
+            const hosts = Array.isArray(originalGroup?.hosts)
+                ? originalGroup.hosts
+                : Array.isArray(originalGroup?.host)
+                    ? originalGroup.host
+                    : [];
+            hosts.forEach((host) => {
+                const hostId = host.id ?? host.host_id;
+                if (hostId !== undefined && hostId !== null) {
+                    uniqueHostIds.add(String(hostId));
+                }
+            });
+        });
+
+        const overallCounts = zeroCounts();
+        let hostsWithIssues = 0;
+
+        uniqueHostIds.forEach((hostId) => {
+            const counts = hostIssueMap.get(hostId) || zeroCounts();
+            if (counts.allActiveIssues > 0) {
+                hostsWithIssues += 1;
+            }
+            overallCounts.critical += counts.critical;
+            overallCounts.warning += counts.warning;
+            overallCounts.unknown += counts.unknown;
+            overallCounts.allActiveIssues += counts.allActiveIssues;
+        });
+
+        return res.json({
+            success: true,
+            cached: true,
+            refreshing: dashboardGlobalSummaryCache.isRefreshing,
+            statusFilter,
+            query: { search, includeHosts },
+            counts: {
+                hostGroups: filteredGroupTotal,
+                uniqueHosts: uniqueHostIds.size,
+                hostsWithIssues,
+                ...overallCounts
+            },
+            data: { result: pagedSummaries },
+            meta: {
+                page,
+                limit,
+                total: filteredGroupTotal,
+                totalPages: Math.max(
+                    1,
+                    Math.ceil(filteredGroupTotal / limit)
+                ),
+                totalGroupsFromCentreon,
+                cacheLoaded: true,
+                cacheFresh,
+                cacheRefreshing: dashboardGlobalSummaryCache.isRefreshing,
+                cacheUpdatedAt: dashboardGlobalSummaryCache.updatedAt,
+                cacheTtlMs: DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS,
+                totalActiveServicesCached: allActiveServices.length,
+                totalServicesInSelectedView: selectedServices.length
+            }
+        });
+    } catch (error) {
+        console.error("Failed to get Data Center host groups:", {
+            status: error.response?.status,
+            data: error.response?.data,
+            message: error.message
+        });
         return handleCentreonError(error, res, next);
     }
 };
@@ -1812,11 +2366,14 @@ const acknowledgeService = async (req, res, next) => {
             auditServerId,
             auditError,
             cachePatchedCount,
+            updatedCounts:
+                dashboardGlobalSummaryCache.counts,
             resource: {
                 host: targetHost,
                 service: targetService,
                 hostId,
-                serviceId
+                serviceId,
+                hostAddress: hostAddress || null
             },
             centreon: centreonResponse.data
         });
@@ -1833,6 +2390,7 @@ const acknowledgeService = async (req, res, next) => {
         try {
             await writeAuditLog({
                 host: targetHost,
+                hostAddress,
                 service: targetService,
                 logType: "ACKNOWLEDGEMENT_FAILED",
                 oldStatus: null,
@@ -1938,19 +2496,22 @@ const unacknowledgeService = async (req, res, next) => {
             console.error("Unacknowledgement succeeded but audit log failed:", auditError);
         }
 
-        return res.json({
+       return res.json({
             success: true,
             message: "Service unacknowledged successfully.",
             auditLogged,
             auditLogId,
-            auditServerId,
+            auditServerId,      
             auditError,
             cachePatchedCount,
+            updatedCounts:
+                dashboardGlobalSummaryCache.counts,
             resource: {
                 host: targetHost,
                 service: targetService,
                 hostId,
-                serviceId
+                serviceId,
+                hostAddress: hostAddress || null
             },
             centreon: centreonResponse.data
         });
@@ -1967,6 +2528,7 @@ const unacknowledgeService = async (req, res, next) => {
         try {
             await writeAuditLog({
                 host: targetHost,
+                hostAddress,
                 service: targetService,
                 logType: "UNACKNOWLEDGEMENT_FAILED",
                 oldStatus: "ACKNOWLEDGED",
@@ -2067,5 +2629,6 @@ module.exports = {
     getGlobalServiceStatusSummaryList,
     acknowledgeService,
     unacknowledgeService,
-    testMonitoringServers
+    testMonitoringServers,
+    getDataCenterHostGroups
 };

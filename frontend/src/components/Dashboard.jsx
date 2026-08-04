@@ -7,6 +7,391 @@ import cevaLogo from "../assets/CEVA.png";
 
 const BASE_API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
+const DataCenterContent = ({
+    groups,
+    counts,
+    meta,
+    loading,
+    error,
+    search,
+    setSearch,
+    statusFilter,
+    setStatusFilter,
+    page,
+    setPage,
+    limit,
+    setLimit,
+    selectedGroup,
+    setSelectedGroup,
+    detailPage,
+    setDetailPage,
+    detailLimit,
+    setDetailLimit,
+    detailFilter,
+    setDetailFilter,
+    onRefresh
+}) => {
+    const selectedHosts = selectedGroup?.hosts || [];
+
+    const filteredDetailHosts = useMemo(() => {
+        if (!selectedGroup) return [];
+
+        if (detailFilter === 'critical') {
+            return selectedHosts.filter(
+                (host) => Number(host.counts?.critical || 0) > 0
+            );
+        }
+
+        if (detailFilter === 'warning') {
+            return selectedHosts.filter(
+                (host) => Number(host.counts?.warning || 0) > 0
+            );
+        }
+
+        if (detailFilter === 'unknown') {
+            return selectedHosts.filter(
+                (host) => Number(host.counts?.unknown || 0) > 0
+            );
+        }
+
+        if (detailFilter === 'down') {
+            return selectedHosts.filter(
+                (host) => Number(host.state) === 1
+            );
+        }
+
+        return selectedHosts;
+    }, [selectedGroup, selectedHosts, detailFilter]);
+
+    const totalDetailPages = Math.max(
+        1,
+        Math.ceil(filteredDetailHosts.length / detailLimit)
+    );
+
+    const paginatedDetailHosts = useMemo(() => {
+        const start = (detailPage - 1) * detailLimit;
+        return filteredDetailHosts.slice(start, start + detailLimit);
+    }, [filteredDetailHosts, detailPage, detailLimit]);
+
+    const downHostCount = selectedHosts.filter(
+        (host) => Number(host.state) === 1
+    ).length;
+
+    const selectedCounts = selectedGroup?.counts || {
+        allActiveIssues: 0,
+        critical: 0,
+        warning: 0,
+        unknown: 0
+    };
+
+    const selectDetailFilter = (filter) => {
+        setDetailFilter(filter);
+        setDetailPage(1);
+    };
+
+    if (error) {
+        return (
+            <div className="data-center-error">
+                <p>{error}</p>
+                <button className="refresh-btn" onClick={onRefresh}>
+                    Retry
+                </button>
+            </div>
+        );
+    }
+
+    if (selectedGroup) {
+        return (
+            <div className="data-center-container">
+                <div className="data-center-detail-header">
+                    <button
+                        className="refresh-btn"
+                        onClick={() => {
+                            setSelectedGroup(null);
+                            setDetailPage(1);
+                            setDetailFilter('all');
+                        }}
+                    >
+                        Back to Host Groups
+                    </button>
+                    <h2>{selectedGroup.name}</h2>
+                </div>
+
+                <div className="stats-grid" style={{ marginBottom: '24px' }}>
+                    <div
+                        className={`stat-card all ${detailFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => selectDetailFilter('all')}
+                    >
+                        <div className="stat-number">
+                            {selectedCounts.allActiveIssues || 0}
+                        </div>
+                        <div className="stat-label">All Service Issues</div>
+                    </div>
+                    <div
+                        className={`stat-card critical ${detailFilter === 'critical' ? 'active' : ''}`}
+                        onClick={() => selectDetailFilter('critical')}
+                    >
+                        <div className="stat-number">
+                            {selectedCounts.critical || 0}
+                        </div>
+                        <div className="stat-label">Critical Services</div>
+                    </div>
+                    <div
+                        className={`stat-card warning ${detailFilter === 'warning' ? 'active' : ''}`}
+                        onClick={() => selectDetailFilter('warning')}
+                    >
+                        <div className="stat-number">
+                            {selectedCounts.warning || 0}
+                        </div>
+                        <div className="stat-label">Warning Services</div>
+                    </div>
+                    <div
+                        className={`stat-card unknown ${detailFilter === 'unknown' ? 'active' : ''}`}
+                        onClick={() => selectDetailFilter('unknown')}
+                    >
+                        <div className="stat-number">
+                            {selectedCounts.unknown || 0}
+                        </div>
+                        <div className="stat-label">Unknown Services</div>
+                    </div>
+                    <div
+                        className={`stat-card critical ${detailFilter === 'down' ? 'active' : ''}`}
+                        onClick={() => selectDetailFilter('down')}
+                    >
+                        <div className="stat-number">{downHostCount}</div>
+                        <div className="stat-label">Down Hosts</div>
+                    </div>
+                </div>
+
+                <div className="data-center-detail-controls-bottom">
+                    <span>
+                        {filteredDetailHosts.length} matching hosts
+                    </span>
+                    <select
+                        className="data-center-page-size-select"
+                        value={detailLimit}
+                        onChange={(event) => {
+                            setDetailLimit(Number(event.target.value));
+                            setDetailPage(1);
+                        }}
+                    >
+                        <option value="10">10</option>
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="999999">All</option>
+                    </select>
+                    <button
+                        className="data-center-page-btn"
+                        onClick={() => setDetailPage((current) => Math.max(1, current - 1))}
+                        disabled={detailPage <= 1}
+                    >
+                        Prev
+                    </button>
+                    <span>
+                        Page {detailPage} of {totalDetailPages}
+                    </span>
+                    <button
+                        className="data-center-page-btn"
+                        onClick={() => setDetailPage((current) => Math.min(totalDetailPages, current + 1))}
+                        disabled={detailPage >= totalDetailPages}
+                    >
+                        Next
+                    </button>
+                </div>
+
+                <div className="data-center-table-wrapper">
+                    <table className="data-center-detail-table">
+                        <thead>
+                            <tr>
+                                <th>Host</th>
+                                <th>Alias</th>
+                                <th>Critical</th>
+                                <th>Warning</th>
+                                <th>Unknown</th>
+                                <th>All Issues</th>
+                                <th>State</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {paginatedDetailHosts.length === 0 ? (
+                                <tr>
+                                    <td colSpan="7" className="no-data">
+                                        No hosts match the selected filter.
+                                    </td>
+                                </tr>
+                            ) : (
+                                paginatedDetailHosts.map((host) => (
+                                    <tr key={host.id ?? host.name}>
+                                        <td className="host-name">{host.name || 'N/A'}</td>
+                                        <td>{host.alias || '-'}</td>
+                                        <td className="critical-count">{host.counts?.critical || 0}</td>
+                                        <td className="warning-count">{host.counts?.warning || 0}</td>
+                                        <td className="unknown-count">{host.counts?.unknown || 0}</td>
+                                        <td className="total-count">{host.counts?.allActiveIssues || 0}</td>
+                                        <td>
+                                            <span className={`host-status status-${host.state}`}>
+                                                {Number(host.state) === 0 ? 'UP' :
+                                                Number(host.state) === 1 ? 'DOWN' :
+                                                Number(host.state) === 2 ? 'UNREACHABLE' :
+                                                Number(host.state) === 3 ? 'PENDING' : 'UNKNOWN'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="data-center-container">
+            <div className="top-row">
+                <div className="filter-section-compact">
+                    <div className="filter-controls-inline">
+                        <div className="filter-input-group-compact">
+                            <label>HOST GROUP</label>
+                            <input
+                                type="text"
+                                className="filter-input-compact"
+                                placeholder="Search host groups..."
+                                value={search}
+                                onChange={(event) => setSearch(event.target.value)}
+                            />
+                        </div>
+                        <div className="filter-input-group-compact">
+                            <label>STATUS</label>
+                            <select
+                                className="filter-select-compact"
+                                value={statusFilter}
+                                onChange={(event) => {
+                                    setStatusFilter(event.target.value);
+                                    setPage(1);
+                                }}
+                            >
+                                <option value="unhandled">Unhandled Problems</option>
+                                <option value="acknowledged">Acknowledged</option>
+                                <option value="all">All Active Problems</option>
+                            </select>
+                        </div>
+                        <button className="refresh-btn" onClick={onRefresh} disabled={loading}>
+                            {loading ? 'Refreshing...' : 'Refresh Data Center'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div className="stats-grid" style={{ marginBottom: '24px' }}>
+                <div className="stat-card all">
+                    <div className="stat-number">{counts.allActiveIssues ?? '-'}</div>
+                    <div className="stat-label">All Service Issues</div>
+                </div>
+                <div className="stat-card critical">
+                    <div className="stat-number">{counts.critical ?? '-'}</div>
+                    <div className="stat-label">Critical Services</div>
+                </div>
+                <div className="stat-card warning">
+                    <div className="stat-number">{counts.warning ?? '-'}</div>
+                    <div className="stat-label">Warning Services</div>
+                </div>
+                <div className="stat-card unknown">
+                    <div className="stat-number">{counts.unknown ?? '-'}</div>
+                    <div className="stat-label">Unknown Services</div>
+                </div>
+            </div>
+
+            <div className="data-center-detail-controls-bottom">
+                <span>
+                    Host Groups: {meta.total || 0} | Unique Hosts: {counts.uniqueHosts || 0} | Hosts with Issues: {counts.hostsWithIssues || 0}
+                </span>
+                <select
+                    className="data-center-page-size-select"
+                    value={limit}
+                    onChange={(event) => {
+                        setLimit(Number(event.target.value));
+                        setPage(1);
+                    }}
+                    disabled={loading}
+                >
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                </select>
+                <button
+                    className="data-center-page-btn"
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    disabled={loading || page <= 1}
+                >
+                    Prev
+                </button>
+                <span>Page {page} of {meta.totalPages || 1}</span>
+                <button
+                    className="data-center-page-btn"
+                    onClick={() => setPage((current) => Math.min(meta.totalPages || 1, current + 1))}
+                    disabled={loading || page >= (meta.totalPages || 1)}
+                >
+                    Next
+                </button>
+            </div>
+
+            <div className="data-center-table-wrapper">
+                <table className="data-center-table">
+                    <thead>
+                        <tr>
+                            <th>Host Group</th>
+                            <th>All Service Issues</th>
+                            <th>Critical</th>
+                            <th>Warning</th>
+                            <th>Unknown</th>
+                            <th>Hosts</th>
+                            <th>Hosts with Issues</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr>
+                                <td colSpan="7" className="loading-cell">
+                                    Loading Data Center host groups...
+                                </td>
+                            </tr>
+                        ) : groups.length === 0 ? (
+                            <tr>
+                                <td colSpan="7" className="no-data">
+                                    No host groups found.
+                                </td>
+                            </tr>
+                        ) : (
+                            groups.map((group) => (
+                                <tr
+                                    key={group.id ?? group.name}
+                                    className="data-center-row"
+                                    onClick={() => {
+                                        setSelectedGroup(group);
+                                        setDetailPage(1);
+                                        setDetailFilter('all');
+                                    }}
+                                >
+                                    <td className="group-name">{group.name}</td>
+                                    <td className="total-count">{group.counts?.allActiveIssues || 0}</td>
+                                    <td className="critical-count">{group.counts?.critical || 0}</td>
+                                    <td className="warning-count">{group.counts?.warning || 0}</td>
+                                    <td className="unknown-count">{group.counts?.unknown || 0}</td>
+                                    <td>{group.hostCount || 0}</td>
+                                    <td>{group.hostsWithIssues || 0}</td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
 export default function Dashboard() {
     const location = useLocation();
     const navigate = useNavigate();
@@ -18,6 +403,7 @@ export default function Dashboard() {
     const [currentTableType, setCurrentTableType] = useState('all');
     const [filters, setFilters] = useState({ host: '', service: '', poller: 'all' });
     const [showAllStatusesForPoller, setShowAllStatusesForPoller] = useState(true);
+    const [statusFilter, setStatusFilter] = useState('unhandled');
 
     // --- SERVICE PAGINATION STATE ---
     const [servicePage, setServicePage] = useState(1);
@@ -105,6 +491,36 @@ export default function Dashboard() {
     const [showAckModal, setShowAckModal] = useState(false);
     const [ackComment, setAckComment] = useState('');
     const [pendingAck, setPendingAck] = useState(null);
+    // --- DATA CENTER STATE ---
+    const [dataCenterGroups, setDataCenterGroups] = useState([]);
+    const [dataCenterCounts, setDataCenterCounts] = useState({
+        hostGroups: 0,
+        uniqueHosts: 0,
+        hostsWithIssues: 0,
+        allActiveIssues: 0,
+        critical: 0,
+        warning: 0,
+        unknown: 0
+    });
+    const [dataCenterMeta, setDataCenterMeta] = useState({
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 1
+    });
+    const [dataCenterPage, setDataCenterPage] = useState(1);
+    const [dataCenterLimit, setDataCenterLimit] = useState(20);
+    const [dataCenterSearch, setDataCenterSearch] = useState('');
+    const [debouncedDataCenterSearch, setDebouncedDataCenterSearch] = useState('');
+    const [dataCenterStatusFilter, setDataCenterStatusFilter] = useState('unhandled');
+    const [dataCenterSelectedGroup, setDataCenterSelectedGroup] = useState(null);
+    const [dataCenterDetailPage, setDataCenterDetailPage] = useState(1);
+    const [dataCenterDetailLimit, setDataCenterDetailLimit] = useState(20);
+    const [dataCenterDetailFilter, setDataCenterDetailFilter] = useState('all');
+    const [dataCenterLoading, setDataCenterLoading] = useState(false);
+    const [dataCenterError, setDataCenterError] = useState(null);
+    const dataCenterRequestIdRef = useRef(0);
+    const dataCenterRetryTimerRef = useRef(null);
 
     // ============================================================
     // NORMALIZER HELPERS
@@ -193,12 +609,23 @@ export default function Dashboard() {
         );
     }, []);
 
-    const buildServiceCounts = useCallback((services) => {
-        const unhandledServices = services.filter(service => !isServiceAcknowledged(service));
+    const buildServiceCounts = useCallback((services, handlingFilter = 'unhandled') => {
+        const handlingServices = services.filter((service) => {
+            const acknowledged = isServiceAcknowledged(service);
+            if (handlingFilter === 'acknowledged') return acknowledged;
+            if (handlingFilter === 'all') return true;
+            return !acknowledged;
+        });
 
-        const critical = unhandledServices.filter(service => service.statusCode === 2).length;
-        const warning = unhandledServices.filter(service => service.statusCode === 1).length;
-        const unknown = unhandledServices.filter(service => service.statusCode === 3).length;
+        const critical = handlingServices.filter(
+            (service) => service.statusCode === 2
+        ).length;
+        const warning = handlingServices.filter(
+            (service) => service.statusCode === 1
+        ).length;
+        const unknown = handlingServices.filter(
+            (service) => service.statusCode === 3
+        ).length;
 
         return {
             allActiveIssues: critical + warning + unknown,
@@ -262,6 +689,14 @@ export default function Dashboard() {
 
         return () => clearTimeout(timer);
     }, [filters.service]);
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setDebouncedDataCenterSearch(dataCenterSearch.trim());
+            setDataCenterPage(1);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [dataCenterSearch]);
 
     useEffect(() => {
         dashboardSearchActiveRef.current =
@@ -331,7 +766,8 @@ export default function Dashboard() {
         page = 1,
         limit = 100,
         hostSearch = '',
-        serviceSearch = ''
+        serviceSearch = '',
+        statusFilterParam = 'unhandled'
     ) => {
         const requestId = dashboardGlobalListRequestIdRef.current + 1;
         dashboardGlobalListRequestIdRef.current = requestId;
@@ -355,7 +791,8 @@ export default function Dashboard() {
             const params = new URLSearchParams({
                 type,
                 page: String(page),
-                limit: String(limit)
+                limit: String(limit),
+                statusFilter: statusFilterParam
             });
 
             if (hostSearch) {
@@ -443,7 +880,8 @@ export default function Dashboard() {
                             page,
                             limit,
                             hostSearch,
-                            serviceSearch
+                            serviceSearch,
+                            statusFilterParam
                         );
                     }
                 }, 10000);
@@ -471,6 +909,95 @@ export default function Dashboard() {
         }
     }, []);
 
+    const fetchDataCenterHostGroups = useCallback(async ({ background = false } = {}) => {
+        const requestId = dataCenterRequestIdRef.current + 1;
+        dataCenterRequestIdRef.current = requestId;
+        const isLatestRequest = () => dataCenterRequestIdRef.current === requestId;
+
+        if (dataCenterRetryTimerRef.current) {
+            clearTimeout(dataCenterRetryTimerRef.current);
+            dataCenterRetryTimerRef.current = null;
+        }
+
+        try {
+            if (!background) setDataCenterLoading(true);
+            setDataCenterError(null);
+
+            const token = localStorage.getItem('centreon_auth_token');
+            const params = new URLSearchParams({
+                page: String(dataCenterPage),
+                limit: String(dataCenterLimit),
+                statusFilter: dataCenterStatusFilter,
+                search: debouncedDataCenterSearch,
+                includeHosts: 'true'
+            });
+
+            const response = await fetch(
+                `${BASE_API_URL}/api/centreon/datacenter/hostgroups?${params.toString()}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                }
+            );
+
+            const payload = await response.json().catch(() => null);
+
+            if (!response.ok) {
+                throw new Error(
+                    payload?.message ||
+                    `Data Center request failed with HTTP ${response.status}`
+                );
+            }
+
+            if (!isLatestRequest()) return;
+
+            setDataCenterGroups(payload?.data?.result || []);
+            setDataCenterCounts(payload?.counts || {
+                hostGroups: 0,
+                uniqueHosts: 0,
+                hostsWithIssues: 0,
+                allActiveIssues: 0,
+                critical: 0,
+                warning: 0,
+                unknown: 0
+            });
+            setDataCenterMeta(payload?.meta || {
+                page: dataCenterPage,
+                limit: dataCenterLimit,
+                total: 0,
+                totalPages: 1
+            });
+            setLastUpdated(new Date().toLocaleTimeString());
+
+            const shouldRetry =
+                payload?.cached === false ||
+                payload?.meta?.cacheLoaded === false ||
+                payload?.meta?.cacheRefreshing === true;
+
+            if (shouldRetry) {
+                dataCenterRetryTimerRef.current = setTimeout(() => {
+                    if (isLatestRequest()) {
+                        fetchDataCenterHostGroups({ background: true });
+                    }
+                }, 10000);
+            }
+        } catch (error) {
+            if (!isLatestRequest()) return;
+            console.error('Error fetching Data Center host groups:', error);
+            setDataCenterError(error.message);
+        } finally {
+            if (isLatestRequest() && !background) {
+                setDataCenterLoading(false);
+            }
+        }
+    }, [
+        dataCenterPage,
+        dataCenterLimit,
+        dataCenterStatusFilter,
+        debouncedDataCenterSearch
+    ]);
+
     // ============================================================
     // DASHBOARD FETCH
     // ============================================================
@@ -489,6 +1016,7 @@ export default function Dashboard() {
             }
 
             fetchGlobalDashboardSummary(
+                statusFilter === 'unhandled' &&
                 !(usingDashboardGlobalCache && hasDashboardSearch)
             );
 
@@ -611,7 +1139,8 @@ export default function Dashboard() {
         servicePage,
         serviceLimit,
         fetchGlobalDashboardSummary,
-        isServiceAcknowledged
+        isServiceAcknowledged,
+        statusFilter
     ]);
 
     // ============================================================
@@ -831,21 +1360,27 @@ export default function Dashboard() {
         refreshDashboardData();
         fetchPollersRoster();
 
-        if (
-            location.pathname === '/dashboard' &&
-            filters.poller === 'all'
-        ) {
+        if (location.pathname === '/dashboard' && filters.poller === 'all') {
             fetchDashboardGlobalServiceList(
                 currentTableType,
                 servicePage,
                 serviceLimit,
                 debouncedHostSearch,
-                debouncedServiceSearch
+                debouncedServiceSearch,
+                statusFilter
             );
         }
 
         if (selectedPollerId) {
-            fetchPollerHosts(selectedPollerId, pollerHostPage, pollerHostLimit);
+            fetchPollerHosts(
+                selectedPollerId,
+                pollerHostPage,
+                pollerHostLimit
+            );
+        }
+
+        if (location.pathname === '/datacenter') {
+            fetchDataCenterHostGroups();
         }
     };
 
@@ -870,6 +1405,9 @@ export default function Dashboard() {
             if (selectedPollerId) {
                 fetchPollerHosts(selectedPollerId, pollerHostPage, pollerHostLimit);
             }
+            if (location.pathname === '/datacenter') {
+                fetchDataCenterHostGroups({ background: true });
+            }
         }, 300000);
 
         return () => clearInterval(heartbeat);
@@ -881,8 +1419,24 @@ export default function Dashboard() {
         pollerHostPage,
         pollerHostLimit,
         location.pathname,
-        navigate
+        navigate,
+        fetchDataCenterHostGroups
     ]);
+
+    useEffect(() => {
+        if (location.pathname === '/datacenter') {
+            fetchDataCenterHostGroups();
+        }
+    }, [location.pathname, fetchDataCenterHostGroups]);
+
+    useEffect(() => {
+        return () => {
+            dataCenterRequestIdRef.current += 1;
+            if (dataCenterRetryTimerRef.current) {
+                clearTimeout(dataCenterRetryTimerRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
         if (location.pathname === '/pollers' && selectedPollerId) {
@@ -923,7 +1477,8 @@ export default function Dashboard() {
                 servicePage,
                 serviceLimit,
                 debouncedHostSearch,
-                debouncedServiceSearch
+                debouncedServiceSearch,
+                statusFilter
             );
         }
     }, [
@@ -933,6 +1488,7 @@ export default function Dashboard() {
         serviceLimit,
         debouncedHostSearch,
         debouncedServiceSearch,
+        statusFilter,
         fetchDashboardGlobalServiceList
     ]);
 
@@ -948,7 +1504,7 @@ export default function Dashboard() {
 
     const displayCounts = useMemo(() => {
         if (location.pathname === '/pollers' && selectedPollerId) {
-            return pollerServiceCounts;
+            return buildServiceCounts(pollerServices, statusFilter);
         }
 
         if (location.pathname === '/dashboard' && activePollerContext === 'all') {
@@ -961,41 +1517,28 @@ export default function Dashboard() {
         }
 
         if (activePollerContext !== 'all') {
-            const critical = cachedCritical.filter(s =>
-                s.poller_name === activePollerContext &&
-                !isServiceAcknowledged(s)
-            ).length;
+            const services = [
+                ...cachedCritical,
+                ...cachedWarning,
+                ...cachedUnknown
+            ].filter((service) => service.poller_name === activePollerContext);
 
-            const warning = cachedWarning.filter(s =>
-                s.poller_name === activePollerContext &&
-                !isServiceAcknowledged(s)
-            ).length;
-
-            const unknown = cachedUnknown.filter(s =>
-                s.poller_name === activePollerContext &&
-                !isServiceAcknowledged(s)
-            ).length;
-
-            return {
-                allActiveIssues: critical + warning + unknown,
-                critical,
-                warning,
-                unknown
-            };
+            return buildServiceCounts(services, statusFilter);
         }
 
         return counts;
     }, [
         location.pathname,
         selectedPollerId,
-        pollerServiceCounts,
+        pollerServices,
+        statusFilter,
         activePollerContext,
         globalDashboardCounts,
         counts,
         cachedCritical,
         cachedWarning,
         cachedUnknown,
-        isServiceAcknowledged
+        buildServiceCounts
     ]);
 
     const isSearchMode = Boolean(debouncedHostSearch || debouncedServiceSearch);
@@ -1052,6 +1595,7 @@ export default function Dashboard() {
         cachedWarning,
         cachedUnknown,
         filters,
+        statusFilter,
         isServiceAcknowledged
     ]);
 
@@ -1060,21 +1604,43 @@ export default function Dashboard() {
             ? dashboardGlobalServices
             : filteredServices;
 
-        return source.filter(service => !isServiceAcknowledged(service));
+        return source.filter((service) => {
+            const acknowledged = isServiceAcknowledged(service);
+            if (statusFilter === 'acknowledged') return acknowledged;
+            if (statusFilter === 'all') return true;
+            return !acknowledged;
+        });
     }, [
         dashboardGlobalListMode,
         dashboardGlobalServices,
         filteredServices,
+        statusFilter,
         isServiceAcknowledged
     ]);
 
     const filteredPollerServices = useMemo(() => {
-        if (currentTableType === 'all') return pollerServices;
-        if (currentTableType === 'critical') return pollerServices.filter(service => service.statusCode === 2);
-        if (currentTableType === 'warning') return pollerServices.filter(service => service.statusCode === 1);
-        if (currentTableType === 'unknown') return pollerServices.filter(service => service.statusCode === 3);
-        return pollerServices;
-    }, [pollerServices, currentTableType]);
+        let services = pollerServices;
+
+        if (currentTableType === 'critical') {
+            services = services.filter((service) => service.statusCode === 2);
+        } else if (currentTableType === 'warning') {
+            services = services.filter((service) => service.statusCode === 1);
+        } else if (currentTableType === 'unknown') {
+            services = services.filter((service) => service.statusCode === 3);
+        }
+
+        return services.filter((service) => {
+            const acknowledged = isServiceAcknowledged(service);
+            if (statusFilter === 'acknowledged') return acknowledged;
+            if (statusFilter === 'all') return true;
+            return !acknowledged;
+        });
+    }, [
+        pollerServices,
+        currentTableType,
+        statusFilter,
+        isServiceAcknowledged
+    ]);
 
     // ============================================================
     // PAGINATION HELPERS
@@ -1240,88 +1806,182 @@ export default function Dashboard() {
     }, []);
 
     const handleAcknowledge = async (
+    hostName,
+    serviceDescription,
+    hostId = null,
+    serviceId = null,
+    hostAddress = null,
+    customComment = null
+) => {
+    const ackKey = getAckKey(
         hostName,
         serviceDescription,
-        hostId = null,
-        serviceId = null,
-        hostAddress = null,
-        customComment = null
-    ) => {
-        const ackKey = getAckKey(hostName, serviceDescription, hostId, serviceId);
+        hostId,
+        serviceId
+    );
 
-        try {
-            setAckInProgressIds(prev => {
-                const next = new Set(prev);
-                next.add(ackKey);
-                return next;
-            });
+    try {
+        setAckInProgressIds(prev => {
+            const next = new Set(prev);
+            next.add(ackKey);
+            return next;
+        });
 
-            const token = localStorage.getItem('centreon_auth_token');
+        const token = localStorage.getItem(
+            'centreon_auth_token'
+        );
 
-            const payload = {
-                host: hostName,
-                service: serviceDescription,
-                hostId,
-                serviceId,
-                hostAddress
-            };
+        const payload = {
+            host: hostName,
+            service: serviceDescription,
+            hostId,
+            serviceId,
+            hostAddress
+        };
 
-            if (customComment) {
-                payload.comment = customComment;
-            }
+        if (customComment) {
+            payload.comment = customComment;
+        }
 
-            const response = await fetch(`${BASE_API_URL}/api/centreon/acknowledge`, {
+        const response = await fetch(
+            `${BASE_API_URL}/api/centreon/acknowledge`,
+            {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                throw new Error("Acknowledge network payload failed");
             }
+        );
 
-            await response.json();
+        const result = await response.json().catch(() => null);
 
-            markServiceAsAcknowledged(hostName, serviceDescription, hostId, serviceId);
-            setLastUpdated(new Date().toLocaleTimeString());
+        if (!response.ok) {
+            throw new Error(
+                result?.message ||
+                `Acknowledge failed with HTTP ${response.status}`
+            );
+        }
 
-            if (!dashboardGlobalListMode) {
-                refreshDashboardData();
-            }
+        markServiceAsAcknowledged(
+            hostName,
+            serviceDescription,
+            hostId,
+            serviceId
+        );
 
-        } catch (error) {
-            console.error("Failed to run safe exception acknowledgment:", error);
-        } finally {
-            setAckInProgressIds(prev => {
-                const next = new Set(prev);
-                next.delete(ackKey);
-                return next;
+        /*
+         * Apply the backend's recalculated global counts immediately,
+         * but only when there is no active Dashboard search.
+         *
+         * During search mode, the list request below will provide the
+         * correct filteredCounts instead.
+         */
+        if (
+            result?.updatedCounts &&
+            statusFilter === 'unhandled' &&
+            !dashboardSearchActiveRef.current
+        ) {
+            setGlobalDashboardCounts({
+                allActiveIssues:
+                    result.updatedCounts.allActiveIssues,
+                critical:
+                    result.updatedCounts.critical,
+                warning:
+                    result.updatedCounts.warning,
+                unknown:
+                    result.updatedCounts.unknown
             });
         }
-    };
+
+        setLastUpdated(
+            new Date().toLocaleTimeString()
+        );
+
+        /*
+         * Global Dashboard:
+         * Reload the current severity, page, and search.
+         */
+        if (dashboardGlobalListMode) {
+            await fetchDashboardGlobalServiceList(
+                currentTableType,
+                servicePage,
+                serviceLimit,
+                debouncedHostSearch,
+                debouncedServiceSearch,
+                statusFilter
+            );
+
+            return;
+        }
+
+        /*
+         * Pollers page:
+         * Reload the selected Poller so service state and local
+         * Poller counts remain synchronized.
+         */
+        if (
+            location.pathname === '/pollers' &&
+            selectedPollerId
+        ) {
+            await fetchPollerHosts(
+                selectedPollerId,
+                pollerHostPage,
+                pollerHostLimit
+            );
+
+            return;
+        }
+
+        /*
+         * Dashboard with a specific Poller filter:
+         * Reload the normal Dashboard data.
+         */
+        await refreshDashboardData();
+
+    } catch (error) {
+        console.error(
+            "Failed to run safe exception acknowledgment:",
+            error
+        );
+    } finally {
+        setAckInProgressIds(prev => {
+            const next = new Set(prev);
+            next.delete(ackKey);
+            return next;
+        });
+    }
+};
 
     const handleUnacknowledge = async (
+    hostName,
+    serviceDescription,
+    hostId = null,
+    serviceId = null,
+    hostAddress = null
+) => {
+    const ackKey = getAckKey(
         hostName,
         serviceDescription,
-        hostId = null,
-        serviceId = null,
-        hostAddress = null
-    ) => {
-        const ackKey = getAckKey(hostName, serviceDescription, hostId, serviceId);
+        hostId,
+        serviceId
+    );
 
-        try {
-            setUnackInProgressIds(prev => {
-                const next = new Set(prev);
-                next.add(ackKey);
-                return next;
-            });
+    try {
+        setUnackInProgressIds(prev => {
+            const next = new Set(prev);
+            next.add(ackKey);
+            return next;
+        });
 
-            const token = localStorage.getItem('centreon_auth_token');
+        const token = localStorage.getItem(
+            'centreon_auth_token'
+        );
 
-            const response = await fetch(`${BASE_API_URL}/api/centreon/unacknowledge`, {
+        const response = await fetch(
+            `${BASE_API_URL}/api/centreon/unacknowledge`,
+            {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -1334,31 +1994,99 @@ export default function Dashboard() {
                     serviceId,
                     hostAddress
                 })
-            });
-
-            if (!response.ok) {
-                throw new Error("Unacknowledge network payload failed");
             }
+        );
 
-            await response.json();
+        const result = await response.json().catch(() => null);
 
-            markServiceAsUnacknowledged(hostName, serviceDescription, hostId, serviceId);
-            setLastUpdated(new Date().toLocaleTimeString());
+        if (!response.ok) {
+            throw new Error(
+                result?.message ||
+                `Unacknowledge failed with HTTP ${response.status}`
+            );
+        }
 
-            if (!dashboardGlobalListMode) {
-                refreshDashboardData();
-            }
+        markServiceAsUnacknowledged(
+            hostName,
+            serviceDescription,
+            hostId,
+            serviceId
+        );
 
-        } catch (error) {
-            console.error("Failed to run safe unacknowledgement:", error);
-        } finally {
-            setUnackInProgressIds(prev => {
-                const next = new Set(prev);
-                next.delete(ackKey);
-                return next;
+        /*
+         * Update global Dashboard counts immediately only when
+         * there is no active Dashboard search.
+         */
+        if (
+            result?.updatedCounts &&
+            statusFilter === 'unhandled' &&
+            !dashboardSearchActiveRef.current
+        ) {
+            setGlobalDashboardCounts({
+                allActiveIssues:
+                    result.updatedCounts.allActiveIssues,
+                critical:
+                    result.updatedCounts.critical,
+                warning:
+                    result.updatedCounts.warning,
+                unknown:
+                    result.updatedCounts.unknown
             });
         }
-    };
+
+        setLastUpdated(
+            new Date().toLocaleTimeString()
+        );
+
+        /*
+         * Pollers is currently where acknowledged services
+         * can be unacknowledged. Reload the selected Poller.
+         */
+        if (
+            location.pathname === '/pollers' &&
+            selectedPollerId
+        ) {
+            await fetchPollerHosts(
+                selectedPollerId,
+                pollerHostPage,
+                pollerHostLimit
+            );
+
+            return;
+        }
+
+        /*
+         * This branch supports future UNACK actions directly
+         * from the global Dashboard.
+         */
+        if (dashboardGlobalListMode) {
+            await fetchDashboardGlobalServiceList(
+                currentTableType,
+                servicePage,
+                serviceLimit,
+                debouncedHostSearch,
+                debouncedServiceSearch,
+                statusFilter
+            );
+
+            return;
+        }
+
+        await refreshDashboardData();
+
+    } catch (error) {
+        console.error(
+            "Failed to run safe unacknowledgement:",
+            error
+        );
+    } finally {
+        setUnackInProgressIds(prev => {
+            const next = new Set(prev);
+            next.delete(ackKey);
+            return next;
+        });
+    }
+};
 
     const handleLogout = () => {
         localStorage.clear();
@@ -1384,6 +2112,10 @@ export default function Dashboard() {
                         <span className="nav-text">Pollers</span>
                     </Link>
 
+                    <Link to="/datacenter" className={`nav-item ${location.pathname === '/datacenter' ? 'active' : ''}`}>
+                        <span className="nav-icon">🏢</span>
+                        <span className="nav-text">Data Center</span>
+                    </Link>
                     <Link to="/logs" className={`nav-item ${location.pathname === '/logs' ? 'active' : ''}`}>
                         <span className="nav-icon">📋</span>
                         <span className="nav-text">Audit Logs</span>
@@ -1404,6 +2136,7 @@ export default function Dashboard() {
                     <h1>
                         {location.pathname === '/dashboard' && 'Centreon Service Status Dashboard'}
                         {location.pathname === '/pollers' && 'Pollers Overview'}
+                        {location.pathname === '/datacenter' && 'Data Center Overview'}
                         {location.pathname === '/sla' && 'SLA Metrics'}
                         {location.pathname === '/logs' && 'System Audit Log'}
                     </h1>
@@ -1527,6 +2260,21 @@ export default function Dashboard() {
                                             ))}
                                         </select>
                                     </div>
+                                    <div className="filter-input-group-compact">
+                                        <label>STATUS</label>
+                                        <select
+                                            className="filter-select-compact"
+                                            value={statusFilter}
+                                            onChange={(event) => {
+                                                setStatusFilter(event.target.value);
+                                                setServicePage(1);
+                                            }}
+                                        >
+                                            <option value="unhandled">Unhandled Problems</option>
+                                            <option value="acknowledged">Acknowledged</option>
+                                            <option value="all">All Active Problems</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1626,12 +2374,12 @@ export default function Dashboard() {
                                                         ? (
                                                             isLoadingDashboardGlobalList
                                                                 ? 'Loading services...'
-                                                                : 'No unhandled active issues found matching current criteria.'
+                                                                : `No ${statusFilter === 'acknowledged' ? 'acknowledged' : statusFilter === 'all' ? '' : 'unhandled '}active issues found matching current criteria.`
                                                         )
                                                         : (
                                                             isLoadingServices
                                                                 ? 'Loading services...'
-                                                                : 'No unhandled active issues found matching current criteria.'
+                                                                : `No ${statusFilter === 'acknowledged' ? 'acknowledged' : statusFilter === 'all' ? '' : 'unhandled '}active issues found matching current criteria.`
                                                         )}
                                                 </td>
                                             </tr>
@@ -1654,10 +2402,13 @@ export default function Dashboard() {
                                                     service.id
                                                 );
 
+                                                const acknowledged = isServiceAcknowledged(service);
                                                 return (
                                                     <tr
                                                         key={`${service.host?.id || service.host?.name || 'host'}-${service.id || service.description || idx}`}
-                                                        className={`service-row-${service.statusName?.toLowerCase()}`}
+                                                        className={acknowledged
+                                                            ? 'service-row-acknowledged'
+                                                            : `service-row-${service.statusName?.toLowerCase()}`}
                                                     >
                                                         <td className="host-name">
                                                             {hostName || 'N/A'}
@@ -1678,23 +2429,44 @@ export default function Dashboard() {
                                                         </td>
 
                                                         <td className="ack-cell">
-                                                            <button
-                                                                className="ack-btn ack-action-btn"
-                                                                disabled={ackInProgressIds.has(ackKey)}
-                                                                onClick={() => {
-                                                                    setPendingAck({
+                                                            {acknowledged ? (
+                                                                <button
+                                                                    className="ack-badge ack-success-badge"
+                                                                    disabled={unackInProgressIds.has(ackKey)}
+                                                                    onClick={() => handleUnacknowledge(
                                                                         hostName,
                                                                         serviceDescription,
-                                                                        hostId: service.host?.id,
-                                                                        serviceId: service.id,
+                                                                        service.host?.id,
+                                                                        service.id,
                                                                         hostAddress
-                                                                    });
-                                                                    setAckComment('');
-                                                                    setShowAckModal(true);
-                                                                }}
-                                                            >
-                                                                {ackInProgressIds.has(ackKey) ? 'ACKING...' : 'ACKNOWLEDGE'}
-                                                            </button>
+                                                                    )}
+                                                                    title="Click to remove acknowledgement"
+                                                                >
+                                                                    {unackInProgressIds.has(ackKey)
+                                                                        ? 'REMOVING...'
+                                                                        : 'ACKNOWLEDGED'}
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    className="ack-btn ack-action-btn"
+                                                                    disabled={ackInProgressIds.has(ackKey)}
+                                                                    onClick={() => {
+                                                                        setPendingAck({
+                                                                            hostName,
+                                                                            serviceDescription,
+                                                                            hostId: service.host?.id,
+                                                                            serviceId: service.id,
+                                                                            hostAddress
+                                                                        });
+                                                                        setAckComment('');
+                                                                        setShowAckModal(true);
+                                                                    }}
+                                                                >
+                                                                    {ackInProgressIds.has(ackKey)
+                                                                        ? 'ACKING...'
+                                                                        : 'ACKNOWLEDGE'}
+                                                                </button>
+                                                            )}
                                                         </td>
                                                     </tr>
                                                 );
@@ -1770,7 +2542,6 @@ export default function Dashboard() {
                                                                         unknown: null
                                                                     });
 
-                                                                    fetchPollerHosts(p.poller_id, 1, pollerHostLimit);
                                                                 }}
                                                             >
                                                                 {p.Poller || `Poller ${p.poller_id}`}
@@ -2007,6 +2778,34 @@ export default function Dashboard() {
                     </div>
                 )}
 
+                {location.pathname === '/datacenter' && (
+                    <div className="page active">
+                        <DataCenterContent
+                            groups={dataCenterGroups}
+                            counts={dataCenterCounts}
+                            meta={dataCenterMeta}
+                            loading={dataCenterLoading}
+                            error={dataCenterError}
+                            search={dataCenterSearch}
+                            setSearch={setDataCenterSearch}
+                            statusFilter={dataCenterStatusFilter}
+                            setStatusFilter={setDataCenterStatusFilter}
+                            page={dataCenterPage}
+                            setPage={setDataCenterPage}
+                            limit={dataCenterLimit}
+                            setLimit={setDataCenterLimit}
+                            selectedGroup={dataCenterSelectedGroup}
+                            setSelectedGroup={setDataCenterSelectedGroup}
+                            detailPage={dataCenterDetailPage}
+                            setDetailPage={setDataCenterDetailPage}
+                            detailLimit={dataCenterDetailLimit}
+                            setDetailLimit={setDataCenterDetailLimit}
+                            detailFilter={dataCenterDetailFilter}
+                            setDetailFilter={setDataCenterDetailFilter}
+                            onRefresh={() => fetchDataCenterHostGroups()}
+                        />
+                    </div>
+                )}
                 {location.pathname === '/sla' && <Sla />}
                 {location.pathname === '/logs' && <Logs />}
 

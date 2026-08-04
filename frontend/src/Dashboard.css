@@ -1556,3 +1556,641 @@ button.ack-badge.ack-success-badge:disabled {
         width: 100%;
     }
 }
+
+/* ============================================================
+   NEW DASHBOARD FEATURES
+   Append this block to the END of Dashboard.css
+   ============================================================ */
+
+/* ============================================================
+   FOUR-COLUMN DASHBOARD FILTER BAR
+   Host, Service, Poller, and Status
+   ============================================================ */
+
+.filter-controls-inline {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    align-items: center;
+    gap: 16px;
+}
+
+.filter-input-group-compact {
+    width: 100%;
+    min-width: 0;
+}
+
+.filter-input-compact,
+.filter-select-compact {
+    width: 100%;
+}
+
+/*
+ * Use the browser's native select arrow.
+ * This avoids malformed embedded SVG content.
+ */
+.filter-select,
+.filter-select-compact {
+    appearance: auto;
+    background-image: none !important;
+}
+
+/* Correct selector if the old file contains &gt; */
+.pollers-header > div {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+
+/* ============================================================
+   ACKNOWLEDGE BUTTONS
+   Before ACK: dark gray
+   Hover: green
+   ============================================================ */
+
+.ack-btn,
+.ack-action-btn,
+button.ack-btn,
+button.ack-action-btn {
+    background: #585858 !important;
+    background-color: #585858 !important;
+    color: #ffffff !important;
+    border: 1px solid #6e7681 !important;
+
+    padding: 5px 12px !important;
+    border-radius: 999px !important;
+
+    font-family: inherit !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.3px !important;
+
+    cursor: pointer !important;
+    white-space: nowrap !important;
+
+    transition:
+        background-color 0.2s ease,
+        border-color 0.2s ease,
+        transform 0.2s ease,
+        opacity 0.2s ease;
+}
+
+.ack-btn:hover:not(:disabled),
+.ack-action-btn:hover:not(:disabled),
+button.ack-btn:hover:not(:disabled),
+button.ack-action-btn:hover:not(:disabled) {
+    background: #238636 !important;
+    background-color: #238636 !important;
+    border-color: #2ea043 !important;
+    transform: scale(1.03);
+}
+
+.ack-btn:disabled,
+.ack-action-btn:disabled,
+button.ack-btn:disabled,
+button.ack-action-btn:disabled {
+    background: #30363d !important;
+    background-color: #30363d !important;
+    border-color: #484f58 !important;
+
+    opacity: 0.7 !important;
+    cursor: not-allowed !important;
+    transform: none !important;
+}
+
+
+/* ============================================================
+   ACKNOWLEDGED BUTTON
+   Normal, hover, and disabled states remain green
+   ============================================================ */
+
+.ack-badge,
+.ack-success-badge,
+button.ack-badge,
+button.ack-success-badge,
+button.ack-badge.ack-success-badge {
+    background: #238636 !important;
+    background-color: #238636 !important;
+    color: #ffffff !important;
+    border: 1px solid #2ea043 !important;
+
+    padding: 5px 14px !important;
+    border-radius: 999px !important;
+
+    font-family: inherit !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.3px !important;
+
+    cursor: pointer !important;
+    white-space: nowrap !important;
+
+    appearance: none;
+    outline: none;
+    box-shadow: none !important;
+
+    transition:
+        background-color 0.2s ease,
+        border-color 0.2s ease,
+        transform 0.2s ease,
+        opacity 0.2s ease;
+}
+
+.ack-badge:hover:not(:disabled),
+.ack-success-badge:hover:not(:disabled),
+button.ack-badge:hover:not(:disabled),
+button.ack-success-badge:hover:not(:disabled),
+button.ack-badge.ack-success-badge:hover:not(:disabled) {
+    background: #2ea043 !important;
+    background-color: #2ea043 !important;
+    border-color: #3fb950 !important;
+    transform: scale(1.03);
+}
+
+.ack-badge:disabled,
+.ack-success-badge:disabled,
+button.ack-badge:disabled,
+button.ack-success-badge:disabled,
+button.ack-badge.ack-success-badge:disabled {
+    background: #238636 !important;
+    background-color: #238636 !important;
+    border-color: #2ea043 !important;
+
+    opacity: 0.6 !important;
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    transform: none !important;
+}
+
+.ack-cell {
+    text-align: center;
+    white-space: nowrap;
+}
+
+
+/* ============================================================
+   ACKNOWLEDGED SERVICE ROW
+   ============================================================ */
+
+.services-table tr.service-row-acknowledged td {
+    background-color: rgba(35, 134, 54, 0.22) !important;
+    border-bottom-color: rgba(46, 160, 67, 0.25) !important;
+}
+
+.services-table tr.service-row-acknowledged:hover td {
+    background-color: rgba(35, 134, 54, 0.32) !important;
+}
+
+.services-table tr.service-row-acknowledged td:first-child {
+    border-left: 4px solid #2ea043 !important;
+}
+
+
+/* ============================================================
+   DATA CENTER CONTAINER
+   ============================================================ */
+
+.data-center-container {
+    width: 100%;
+    padding: 0;
+}
+
+.data-center-container .top-row {
+    margin-bottom: 24px;
+}
+
+
+/* ============================================================
+   DATA CENTER FILTER BAR
+   Search, Status, and Refresh
+   ============================================================ */
+
+.data-center-container .filter-controls-inline {
+    display: grid;
+    grid-template-columns:
+        minmax(260px, 2fr)
+        minmax(210px, 1fr)
+        auto;
+    align-items: center;
+    gap: 16px;
+}
+
+.data-center-container .filter-controls-inline .refresh-btn {
+    min-width: 160px;
+    white-space: nowrap;
+}
+
+
+/* ============================================================
+   DATA CENTER STATUS CARDS
+   Supports four summary cards and five detail cards
+   ============================================================ */
+
+.data-center-container .stats-grid {
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit, minmax(180px, 1fr));
+
+    gap: 18px;
+    width: 100%;
+}
+
+.data-center-container .stat-card {
+    min-width: 0;
+    min-height: 126px;
+    padding: 22px 16px;
+}
+
+.data-center-container .stat-card:hover {
+    transform: translateY(-2px);
+}
+
+
+/* ============================================================
+   DATA CENTER DETAIL HEADER
+   ============================================================ */
+
+.data-center-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+
+    gap: 16px;
+    flex-wrap: wrap;
+
+    margin-bottom: 20px;
+}
+
+.data-center-detail-header h2 {
+    margin: 0;
+
+    color: #e6edf3;
+    font-size: 22px;
+    font-weight: 700;
+
+    overflow-wrap: anywhere;
+}
+
+.data-center-detail-header .refresh-btn {
+    flex-shrink: 0;
+}
+
+
+/* ============================================================
+   DATA CENTER PAGINATION AND CONTROLS
+   ============================================================ */
+
+.data-center-detail-controls-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+
+    gap: 10px;
+    flex-wrap: wrap;
+
+    margin: 0 0 16px;
+    padding: 12px 14px;
+
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.data-center-detail-controls-bottom > span:first-child {
+    margin-right: auto;
+}
+
+.data-center-page-size-select {
+    min-width: 72px;
+    min-height: 32px;
+
+    padding: 5px 10px;
+
+    background: #0d1117;
+    color: #c9d1d9;
+
+    border: 1px solid #30363d;
+    border-radius: 6px;
+
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+}
+
+.data-center-page-size-select:hover {
+    border-color: #58a6ff;
+}
+
+.data-center-page-size-select:focus {
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);
+}
+
+.data-center-page-size-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.data-center-page-btn {
+    min-height: 32px;
+    padding: 5px 12px;
+
+    background: #21262d;
+    color: #c9d1d9;
+
+    border: 1px solid #30363d;
+    border-radius: 6px;
+
+    font-size: 13px;
+    font-weight: 600;
+
+    cursor: pointer;
+
+    transition:
+        background-color 0.2s ease,
+        border-color 0.2s ease,
+        color 0.2s ease,
+        transform 0.2s ease;
+}
+
+.data-center-page-btn:hover:not(:disabled) {
+    background: #30363d;
+    border-color: #58a6ff;
+    color: #58a6ff;
+
+    transform: translateY(-1px);
+}
+
+.data-center-page-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    transform: none;
+}
+
+
+/* ============================================================
+   DATA CENTER TABLE WRAPPER
+   ============================================================ */
+
+.data-center-table-wrapper {
+    width: 100%;
+
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+
+/* ============================================================
+   DATA CENTER SUMMARY AND DETAIL TABLES
+   ============================================================ */
+
+.data-center-table,
+.data-center-detail-table {
+    width: 100%;
+    min-width: 880px;
+
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.data-center-table th,
+.data-center-detail-table th {
+    padding: 13px 16px;
+
+    text-align: left;
+    white-space: nowrap;
+
+    background: #0d1117;
+    color: #8b949e;
+
+    border-bottom: 1px solid #30363d;
+
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.data-center-table td,
+.data-center-detail-table td {
+    padding: 12px 16px;
+
+    color: #e6edf3;
+    border-bottom: 1px solid #21262d;
+
+    vertical-align: middle;
+}
+
+.data-center-table tr:last-child td,
+.data-center-detail-table tr:last-child td {
+    border-bottom: none;
+}
+
+.data-center-row {
+    cursor: pointer;
+
+    transition:
+        background-color 0.15s ease;
+}
+
+.data-center-row:hover td,
+.data-center-detail-table tbody tr:hover td {
+    background: #21262d;
+}
+
+.data-center-row .group-name {
+    color: #58a6ff;
+    font-weight: 700;
+}
+
+.data-center-detail-table .host-name {
+    color: #c9e8ff;
+    font-weight: 700;
+}
+
+
+/* ============================================================
+   DATA CENTER COUNT COLORS
+   ============================================================ */
+
+.data-center-table .total-count,
+.data-center-detail-table .total-count {
+    color: #88ccff;
+    font-weight: 700;
+}
+
+.data-center-table .critical-count,
+.data-center-detail-table .critical-count {
+    color: #f85149;
+    font-weight: 700;
+}
+
+.data-center-table .warning-count,
+.data-center-detail-table .warning-count {
+    color: #ff9830;
+    font-weight: 700;
+}
+
+.data-center-table .unknown-count,
+.data-center-detail-table .unknown-count {
+    color: #8b949e;
+    font-weight: 700;
+}
+
+
+/* ============================================================
+   HOST STATUS BADGES
+   DOWN remains separate from Critical service counts
+   ============================================================ */
+
+.host-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 86px;
+    padding: 4px 10px;
+
+    border-radius: 999px;
+
+    color: #ffffff;
+
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.35px;
+
+    white-space: nowrap;
+}
+
+/* UP */
+.host-status.status-0 {
+    background: #238636;
+}
+
+/* DOWN */
+.host-status.status-1 {
+    background: #da3633;
+}
+
+/* UNREACHABLE */
+.host-status.status-2 {
+    background: #6e40c9;
+}
+
+/* PENDING */
+.host-status.status-3 {
+    background: #6b7280;
+}
+
+
+/* ============================================================
+   DATA CENTER ERROR AND EMPTY STATES
+   ============================================================ */
+
+.data-center-error {
+    padding: 36px 24px;
+
+    text-align: center;
+    color: #f85149;
+
+    background: rgba(248, 81, 73, 0.08);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+    border-radius: 12px;
+}
+
+.data-center-error .refresh-btn {
+    margin-top: 14px;
+}
+
+.no-data {
+    padding: 40px !important;
+
+    text-align: center;
+    color: #8b949e !important;
+}
+
+
+/* ============================================================
+   RESPONSIVE FILTERS AND DATA CENTER
+   ============================================================ */
+
+@media (max-width: 1400px) {
+    .filter-controls-inline {
+        grid-template-columns:
+            repeat(2, minmax(220px, 1fr));
+    }
+
+    .data-center-container .filter-controls-inline {
+        grid-template-columns:
+            repeat(2, minmax(220px, 1fr));
+    }
+
+    .data-center-container
+    .filter-controls-inline
+    .refresh-btn {
+        width: max-content;
+    }
+}
+
+@media (max-width: 900px) {
+    .data-center-detail-controls-bottom {
+        justify-content: flex-start;
+    }
+
+    .data-center-detail-controls-bottom
+    > span:first-child {
+        width: 100%;
+        margin-right: 0;
+    }
+}
+
+@media (max-width: 768px) {
+    .filter-controls-inline,
+    .data-center-container
+    .filter-controls-inline {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+
+        gap: 10px;
+    }
+
+    .filter-input-group-compact,
+    .data-center-container
+    .filter-controls-inline
+    .refresh-btn {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .data-center-container .stats-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .data-center-detail-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .data-center-detail-header .refresh-btn {
+        width: 100%;
+    }
+
+    .data-center-detail-controls-bottom {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .data-center-page-size-select,
+    .data-center-page-btn {
+        width: 100%;
+    }
+}

@@ -19,6 +19,7 @@ function App() {
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/pollers" element={<Dashboard />} />
       <Route path="/logs" element={<Dashboard />} />
+      <Route path="/datacenter" element={<Dashboard />} />
 
 
       {/* 3. Fallback: Redirect any unknown path back to login */}
