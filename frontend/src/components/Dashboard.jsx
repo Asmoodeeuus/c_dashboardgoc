@@ -454,18 +454,13 @@ const DataCenterContent = ({
                         </div>
                         <div className="filter-input-group-compact">
                             <label>STATUS</label>
-                            <select
-                                className="filter-select-compact"
-                                value={statusFilter}
-                                onChange={(event) => {
-                                    setStatusFilter(event.target.value);
-                                    setPage(1);
-                                }}
+                            <div
+                                className="filter-readonly-compact"
+                                role="status"
+                                aria-label="Current Data Center handling state"
                             >
-                                <option value="unhandled">Unhandled Problems</option>
-                                <option value="acknowledged">Acknowledged</option>
-                                <option value="all">All Active Problems</option>
-                            </select>
+                                Unhandled Problems
+                            </div>
                         </div>
                         <button className="refresh-btn" onClick={onRefresh} disabled={loading}>
                             {loading ? 'Refreshing...' : 'Refresh Data Center'}
@@ -2577,18 +2572,13 @@ export default function Dashboard() {
                                     </div>
                                     <div className="filter-input-group-compact">
                                         <label>STATUS</label>
-                                        <select
-                                            className="filter-select-compact"
-                                            value={statusFilter}
-                                            onChange={(event) => {
-                                                setStatusFilter(event.target.value);
-                                                setServicePage(1);
-                                            }}
+                                        <div
+                                            className="filter-readonly-compact"
+                                            role="status"
+                                            aria-label="Current handling state"
                                         >
-                                            <option value="unhandled">Unhandled Problems</option>
-                                            <option value="acknowledged">Acknowledged</option>
-                                            <option value="all">All Active Problems</option>
-                                        </select>
+                                            Unhandled Problems
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -2800,7 +2790,7 @@ export default function Dashboard() {
                             {!selectedPoller ? (
                                 <>
                                     <div className="pollers-header">
-                                        <h2>Engine Node Assignments</h2>
+                                        <h2>Poller Assignments</h2>
 
                                         <div className="search-bar">
                                             <input

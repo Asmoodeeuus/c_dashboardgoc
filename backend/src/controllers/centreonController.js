@@ -34,6 +34,41 @@ let dashboardGlobalSummaryCache = {
 
 const DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS = 5 * 60 * 1000;
 
+
+// Read-only Centreon Resources parity cache.
+// This does not replace the production Dashboard cache yet.
+let dashboardResourcesParityCache = {
+    counts: {
+        allActiveIssues: null,
+        critical: null,
+        warning: null,
+        unknown: null
+    },
+    services: {
+        critical: [],
+        warning: [],
+        unknown: []
+    },
+    diagnostics: {
+        totalFetched: 0,
+        totalUnique: 0,
+        duplicatesRemoved: 0,
+        pagesFetched: 0,
+        byStatus: {}
+    },
+    updatedAt: null,
+    isRefreshing: false,
+    lastError: null
+};
+
+const DASHBOARD_RESOURCES_PARITY_CACHE_TTL_MS = 5 * 60 * 1000;
+const DASHBOARD_RESOURCES_PAGE_LIMIT = 100;
+const DASHBOARD_RESOURCE_STATUSES = [
+    "CRITICAL",
+    "WARNING",
+    "UNKNOWN"
+];
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -251,6 +286,236 @@ const buildServicesEndpoint = ({ page = 1, limit = 100, search = null }) => {
     return `/monitoring/services?${params.toString()}`;
 };
 
+const buildResourcesEndpoint = ({
+    page = 1,
+    limit = DASHBOARD_RESOURCES_PAGE_LIMIT,
+    statuses = DASHBOARD_RESOURCE_STATUSES
+}) => {
+    const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+        sort_by: JSON.stringify({
+            status_severity_code: "desc",
+            last_status_change: "desc"
+        }),
+        search: JSON.stringify({
+            $and: []
+        }),
+        states: JSON.stringify([
+            "unhandled_problems"
+        ]),
+        status_types: JSON.stringify([
+            "hard"
+        ]),
+        types: JSON.stringify([
+            "service"
+        ]),
+        statuses: JSON.stringify(statuses)
+    });
+
+    return `/monitoring/resources?${params.toString()}`;
+};
+
+const getResourceIdentity = (resource) => {
+    const uuid = String(resource.uuid || "").trim();
+    if (uuid) return uuid;
+
+    const hostId =
+        resource.host_id ??
+        resource.parent?.id;
+    const serviceId =
+        resource.service_id ??
+        resource.id;
+
+    if (
+        hostId !== undefined &&
+        hostId !== null &&
+        serviceId !== undefined &&
+        serviceId !== null
+    ) {
+        return `${hostId}:${serviceId}`;
+    }
+
+    const hostName = String(
+        resource.parent?.name || "unknown-host"
+    ).trim().toLowerCase();
+    const serviceName = String(
+        resource.name ||
+        resource.alias ||
+        "unknown-service"
+    ).trim().toLowerCase();
+
+    return `${hostName}:${serviceName}`;
+};
+
+const normalizeResourceService = (resource) => {
+    const statusCode = Number(resource.status?.code);
+    const statusName = String(
+        resource.status?.name ||
+        getStatusNameFromCode(statusCode)
+    ).toUpperCase();
+    const parentStatusCode = Number(
+        resource.parent?.status?.code
+    );
+    const isAcknowledged = Boolean(
+        resource.is_acknowledged
+    );
+    const isInDowntime = Boolean(
+        resource.is_in_downtime
+    );
+    const tries = String(resource.tries || "");
+
+    return {
+        id: resource.service_id ?? resource.id,
+        service_id: resource.service_id ?? resource.id,
+        description:
+            resource.name ||
+            resource.alias ||
+            "Unknown Service",
+        display_name:
+            resource.name ||
+            resource.alias ||
+            "Unknown Service",
+        host: {
+            id: resource.host_id ?? resource.parent?.id,
+            name:
+                resource.parent?.name ||
+                "Unknown Host",
+            display_name:
+                resource.parent?.name ||
+                "Unknown Host",
+            alias:
+                resource.parent?.alias ||
+                resource.parent?.name ||
+                "",
+            address:
+                resource.parent?.fqdn ||
+                "",
+            state: Number.isFinite(parentStatusCode)
+                ? parentStatusCode
+                : null,
+            status: resource.parent?.status || null
+        },
+        state: statusCode,
+        state_type: tries.includes("(H)") ? 1 : null,
+        status: resource.status || {
+            code: statusCode,
+            name: statusName
+        },
+        statusCode,
+        statusName,
+        is_acknowledged: isAcknowledged,
+        acknowledged: isAcknowledged,
+        acknowledgement: null,
+        is_in_downtime: isInDowntime,
+        scheduled_downtime_depth: isInDowntime ? 1 : 0,
+        output: resource.information || "",
+        poller_name:
+            resource.monitoring_server_name ||
+            "Default Poller",
+        duration: resource.duration || "",
+        last_check: resource.last_check || null,
+        last_state_change:
+            resource.last_status_change ||
+            null,
+        check_attempt: tries,
+        resource_uuid: resource.uuid || null,
+        resource_type: resource.type || "service",
+        has_active_checks_enabled:
+            resource.has_active_checks_enabled,
+        has_passive_checks_enabled:
+            resource.has_passive_checks_enabled,
+        is_notification_enabled:
+            resource.is_notification_enabled
+    };
+};
+
+const fetchUnhandledHardResourcesByStatus = async (
+    req,
+    statusName
+) => {
+    const uniqueResources = new Map();
+    let page = 1;
+    let totalFromCentreon = 0;
+    let totalFetched = 0;
+    let pagesFetched = 0;
+
+    while (true) {
+        const endpoint = buildResourcesEndpoint({
+            page,
+            limit: DASHBOARD_RESOURCES_PAGE_LIMIT,
+            statuses: [statusName]
+        });
+
+        console.log(
+            `Centreon Resources parity URL [${statusName}]:`,
+            endpoint
+        );
+
+        const response = await centreonAxios.get(endpoint, {
+            headers: getCentreonHeaders(req)
+        });
+
+        const resources =
+            response.data?.result ||
+            response.data?.data?.result ||
+            [];
+        const meta =
+            response.data?.meta ||
+            response.data?.data?.meta ||
+            {};
+
+        totalFromCentreon = Number(meta.total) || resources.length;
+        totalFetched += resources.length;
+        pagesFetched += 1;
+
+        resources.forEach((resource) => {
+            if (resource.type && resource.type !== "service") {
+                return;
+            }
+
+            const currentStatus = String(
+                resource.status?.name || ""
+            ).toUpperCase();
+
+            if (currentStatus !== statusName) {
+                return;
+            }
+
+            uniqueResources.set(
+                getResourceIdentity(resource),
+                resource
+            );
+        });
+
+        if (
+            resources.length === 0 ||
+            totalFetched >= totalFromCentreon
+        ) {
+            break;
+        }
+
+        page += 1;
+    }
+
+    const normalizedServices = Array.from(
+        uniqueResources.values()
+    ).map(normalizeResourceService);
+
+    return {
+        status: statusName,
+        services: normalizedServices,
+        centreonTotal: totalFromCentreon,
+        totalFetched,
+        totalUnique: normalizedServices.length,
+        duplicatesRemoved: Math.max(
+            0,
+            totalFetched - normalizedServices.length
+        ),
+        pagesFetched
+    };
+};
+
 const deriveServerType = (server) => {
     const rawType =
         server.server_type ||
@@ -364,11 +629,7 @@ const serverId = await getOrCreateAuditServerId(host, hostAddress);
 // ============================================================
 
 const recalculateDashboardGlobalCounts = () => {
-    const allActiveServices = getDashboardCachedActiveServices();
-    const unhandledServices = filterServicesByHandlingStatus(
-        allActiveServices,
-        "unhandled"
-    );
+    const unhandledServices = getDashboardCachedActiveServices();
     const updatedCounts = buildStatusCounts(unhandledServices);
 
     dashboardGlobalSummaryCache = {
@@ -383,38 +644,25 @@ const markDashboardCachedServiceAsAcknowledged = ({
     hostId,
     serviceId,
     hostName,
-    serviceDescription,
-    comment,
-    actionBy
+    serviceDescription
 }) => {
-    let patchedCount = 0;
-
-    const targetHostName = String(
-        hostName || ""
-    ).trim().toLowerCase();
-
+    let removedCount = 0;
+    const targetHostName = String(hostName || "").trim().toLowerCase();
     const targetServiceDescription = String(
         serviceDescription || ""
     ).trim().toLowerCase();
 
-    const patchService = (service) => {
+    const isTargetService = (service) => {
         const currentServiceId =
-            service.id ??
-            service.service_id ??
-            service.serviceId;
-
+            service.id ?? service.service_id ?? service.serviceId;
         const currentHostId =
-            service.host?.id ??
-            service.host?.host_id ??
-            service.host_id;
-
+            service.host?.id ?? service.host?.host_id ?? service.host_id;
         const currentHostName = String(
             service.host?.name ||
             service.host?.display_name ||
             service.host_name ||
             ""
         ).trim().toLowerCase();
-
         const currentServiceDescription = String(
             service.description ||
             service.display_name ||
@@ -422,90 +670,58 @@ const markDashboardCachedServiceAsAcknowledged = ({
             ""
         ).trim().toLowerCase();
 
-        let isMatch = false;
-
         if (
-            serviceId !== undefined &&
-            serviceId !== null
+            hostId !== undefined && hostId !== null &&
+            serviceId !== undefined && serviceId !== null
         ) {
-            isMatch =
-                String(currentServiceId) ===
-                String(serviceId);
-        } else if (
-            hostId !== undefined &&
-            hostId !== null
-        ) {
-            isMatch =
+            return (
                 String(currentHostId) === String(hostId) &&
-                currentServiceDescription ===
-                    targetServiceDescription;
-        } else {
-            isMatch =
-                currentHostName === targetHostName &&
-                currentServiceDescription ===
-                    targetServiceDescription;
+                String(currentServiceId) === String(serviceId)
+            );
         }
 
-        if (!isMatch) {
-            return service;
+        if (serviceId !== undefined && serviceId !== null) {
+            return String(currentServiceId) === String(serviceId);
         }
 
-        patchedCount += 1;
-
-        return {
-            ...service,
-            is_acknowledged: true,
-            acknowledged: true,
-            acknowledgement: {
-                ...(
-                    typeof service.acknowledgement === "object" &&
-                    service.acknowledgement !== null &&
-                    !Array.isArray(service.acknowledgement)
-                        ? service.acknowledgement
-                        : {}
-                ),
-                is_acknowledged: true,
-                author: actionBy || "Dashboard User",
-                comment:
-                    comment ||
-                    "Acknowledged from GOC Dashboard",
-                entry_time: new Date().toISOString()
-            }
-        };
+        return (
+            currentHostName === targetHostName &&
+            currentServiceDescription === targetServiceDescription
+        );
     };
+
+    const removeTarget = (services = []) => services.filter((service) => {
+        const matches = isTargetService(service);
+        if (matches) removedCount += 1;
+        return !matches;
+    });
 
     dashboardGlobalSummaryCache = {
         ...dashboardGlobalSummaryCache,
         services: {
-            critical: (
-                dashboardGlobalSummaryCache.services.critical || []
-            ).map(patchService),
-
-            warning: (
-                dashboardGlobalSummaryCache.services.warning || []
-            ).map(patchService),
-
-            unknown: (
-                dashboardGlobalSummaryCache.services.unknown || []
-            ).map(patchService)
+            critical: removeTarget(
+                dashboardGlobalSummaryCache.services.critical
+            ),
+            warning: removeTarget(
+                dashboardGlobalSummaryCache.services.warning
+            ),
+            unknown: removeTarget(
+                dashboardGlobalSummaryCache.services.unknown
+            )
         }
     };
 
-    const updatedCounts =
-        recalculateDashboardGlobalCounts();
-
-    console.log("Dashboard ACK cache patch result:", {
-        patchedCount,
+    const updatedCounts = recalculateDashboardGlobalCounts();
+    console.log("Dashboard ACK unhandled-cache removal:", {
+        removedCount,
         hostId,
         serviceId,
         hostName,
         serviceDescription,
         updatedCounts
     });
-
-    return patchedCount;
+    return removedCount;
 };
-
 const markDashboardCachedServiceAsUnacknowledged = ({
     hostId,
     serviceId,
@@ -895,111 +1111,226 @@ const refreshDashboardGlobalSummaryCache = async (req) => {
         return;
     }
 
-    dashboardGlobalSummaryCache.isRefreshing = true;
+    dashboardGlobalSummaryCache = {
+        ...dashboardGlobalSummaryCache,
+        isRefreshing: true
+    };
 
     try {
-        const limit = 1000;
-        let page = 1;
-        let counted = 0;
-        let totalFromCentreon = 0;
+        // Build the complete candidate snapshot before publishing it.
+        const results = [];
 
-        const criticalServices = [];
-        const warningServices = [];
-        const unknownServices = [];
-
-        while (true) {
-            const endpoint = buildServicesEndpoint({ page, limit });
-
-            console.log(
-                "Centreon dashboard global summary cache URL:",
-                endpoint
+        for (const statusName of DASHBOARD_RESOURCE_STATUSES) {
+            const result = await fetchUnhandledHardResourcesByStatus(
+                req,
+                statusName
             );
 
-            const response = await centreonAxios.get(endpoint, {
-                headers: getCentreonHeaders(req)
-            });
-
-            const services = response.data?.result || [];
-            const normalizedServices = services.map(normalizeService);
-
-            normalizedServices.forEach((service) => {
-                if (!isActiveIssueService(service)) {
-                    return;
-                }
-
-                if (service.statusCode === 2) {
-                    criticalServices.push(service);
-                } else if (service.statusCode === 1) {
-                    warningServices.push(service);
-                } else if (service.statusCode === 3) {
-                    unknownServices.push(service);
-                }
-            });
-
-            totalFromCentreon =
-                Number(response.data?.meta?.total) ||
-                services.length;
-
-            counted += services.length;
-
-            if (counted >= totalFromCentreon || services.length === 0) {
-                break;
+            if (result.totalFetched < result.centreonTotal) {
+                const incompleteError = new Error(
+                    `Incomplete Centreon Resources refresh for ${statusName}.`
+                );
+                incompleteError.debug = result;
+                throw incompleteError;
             }
 
-            page += 1;
+            results.push(result);
         }
 
-        const allActiveServices = [
-            ...criticalServices,
-            ...warningServices,
-            ...unknownServices
-        ];
+        const resultByStatus = Object.fromEntries(
+            results.map((result) => [result.status, result])
+        );
+        const criticalServices =
+            resultByStatus.CRITICAL?.services || [];
+        const warningServices =
+            resultByStatus.WARNING?.services || [];
+        const unknownServices =
+            resultByStatus.UNKNOWN?.services || [];
 
-        const unhandledServices = filterServicesByHandlingStatus(
-            allActiveServices,
-            "unhandled"
+        const counts = {
+            critical: criticalServices.length,
+            warning: warningServices.length,
+            unknown: unknownServices.length
+        };
+        counts.allActiveIssues =
+            counts.critical + counts.warning + counts.unknown;
+
+        const diagnostics = results.reduce(
+            (summary, result) => {
+                summary.totalFetched += result.totalFetched;
+                summary.totalUnique += result.totalUnique;
+                summary.duplicatesRemoved += result.duplicatesRemoved;
+                summary.pagesFetched += result.pagesFetched;
+                summary.byStatus[result.status.toLowerCase()] = {
+                    centreonTotal: result.centreonTotal,
+                    totalFetched: result.totalFetched,
+                    totalUnique: result.totalUnique,
+                    duplicatesRemoved: result.duplicatesRemoved,
+                    pagesFetched: result.pagesFetched
+                };
+                return summary;
+            },
+            {
+                totalFetched: 0,
+                totalUnique: 0,
+                duplicatesRemoved: 0,
+                pagesFetched: 0,
+                byStatus: {}
+            }
         );
 
-        const acknowledgedServices = filterServicesByHandlingStatus(
-            allActiveServices,
-            "acknowledged"
-        );
-
-        const unhandledCounts = buildStatusCounts(unhandledServices);
-
+        // Publish only after all three severities completed successfully.
         dashboardGlobalSummaryCache = {
-            counts: unhandledCounts,
+            counts,
             services: {
                 critical: criticalServices,
                 warning: warningServices,
                 unknown: unknownServices
             },
+            source: "centreon-monitoring-resources",
+            filters: {
+                states: ["unhandled_problems"],
+                statusTypes: ["hard"],
+                types: ["service"],
+                statuses: [...DASHBOARD_RESOURCE_STATUSES]
+            },
+            diagnostics,
             updatedAt: Date.now(),
             isRefreshing: false,
             lastError: null
         };
 
-        console.log("Dashboard global summary cache refreshed:", {
-            totalServicesScanned: counted,
-            totalActiveServicesCached: allActiveServices.length,
-            totalUnhandledServices: unhandledServices.length,
-            totalAcknowledgedServices: acknowledgedServices.length,
-            cachedByStatus: {
-                critical: criticalServices.length,
-                warning: warningServices.length,
-                unknown: unknownServices.length
-            },
-            unhandledCounts
+        console.log("Production Dashboard Resources cache refreshed:", {
+            counts,
+            diagnostics
         });
     } catch (error) {
-        console.error("Failed refreshing dashboard global summary cache:", {
-            status: error.response?.status,
-            data: error.response?.data,
-            message: error.message
-        });
+        console.error(
+            "Failed refreshing production Dashboard Resources cache:",
+            {
+                status: error.response?.status,
+                data: error.response?.data,
+                message: error.message,
+                debug: error.debug
+            }
+        );
 
+        // Preserve the last valid snapshot if a refresh is incomplete.
         dashboardGlobalSummaryCache = {
             ...dashboardGlobalSummaryCache,
+            isRefreshing: false,
+            lastError: {
+                status: error.response?.status,
+                data: error.response?.data,
+                message: error.message,
+                debug: error.debug || null
+            }
+        };
+    }
+};
+const refreshDashboardResourcesParityCache = async (req) => {
+    if (dashboardResourcesParityCache.isRefreshing) {
+        return;
+    }
+
+    dashboardResourcesParityCache = {
+        ...dashboardResourcesParityCache,
+        isRefreshing: true
+    };
+
+    try {
+        // Fetch each severity separately to reproduce the exact
+        // Centreon Resources Status query captured in the browser.
+        const results = [];
+
+        for (const statusName of DASHBOARD_RESOURCE_STATUSES) {
+            results.push(
+                await fetchUnhandledHardResourcesByStatus(
+                    req,
+                    statusName
+                )
+            );
+        }
+
+        const resultByStatus = Object.fromEntries(
+            results.map((result) => [result.status, result])
+        );
+
+        const criticalServices =
+            resultByStatus.CRITICAL?.services || [];
+        const warningServices =
+            resultByStatus.WARNING?.services || [];
+        const unknownServices =
+            resultByStatus.UNKNOWN?.services || [];
+
+        const counts = {
+            critical: criticalServices.length,
+            warning: warningServices.length,
+            unknown: unknownServices.length
+        };
+        counts.allActiveIssues =
+            counts.critical +
+            counts.warning +
+            counts.unknown;
+
+        const diagnostics = results.reduce(
+            (summary, result) => {
+                summary.totalFetched += result.totalFetched;
+                summary.totalUnique += result.totalUnique;
+                summary.duplicatesRemoved +=
+                    result.duplicatesRemoved;
+                summary.pagesFetched += result.pagesFetched;
+                summary.byStatus[result.status.toLowerCase()] = {
+                    centreonTotal: result.centreonTotal,
+                    totalFetched: result.totalFetched,
+                    totalUnique: result.totalUnique,
+                    duplicatesRemoved:
+                        result.duplicatesRemoved,
+                    pagesFetched: result.pagesFetched
+                };
+                return summary;
+            },
+            {
+                totalFetched: 0,
+                totalUnique: 0,
+                duplicatesRemoved: 0,
+                pagesFetched: 0,
+                byStatus: {}
+            }
+        );
+
+        dashboardResourcesParityCache = {
+            counts,
+            services: {
+                critical: criticalServices,
+                warning: warningServices,
+                unknown: unknownServices
+            },
+            diagnostics,
+            updatedAt: Date.now(),
+            isRefreshing: false,
+            lastError: null
+        };
+
+        console.log(
+            "Centreon Resources parity cache refreshed:",
+            {
+                counts,
+                diagnostics
+            }
+        );
+    } catch (error) {
+        console.error(
+            "Failed refreshing Centreon Resources parity cache:",
+            {
+                status: error.response?.status,
+                data: error.response?.data,
+                message: error.message
+            }
+        );
+
+        dashboardResourcesParityCache = {
+            ...dashboardResourcesParityCache,
             isRefreshing: false,
             lastError: {
                 status: error.response?.status,
@@ -1574,12 +1905,24 @@ const getGlobalServiceStatusSummary = async (req, res, next) => {
             refreshing: dashboardGlobalSummaryCache.isRefreshing,
             counts: dashboardGlobalSummaryCache.counts,
             services: dashboardGlobalSummaryCache.services,
+            source:
+                dashboardGlobalSummaryCache.source ||
+                "centreon-monitoring-resources",
+            filters:
+                dashboardGlobalSummaryCache.filters || {
+                    states: ["unhandled_problems"],
+                    statusTypes: ["hard"],
+                    types: ["service"],
+                    statuses: [...DASHBOARD_RESOURCE_STATUSES]
+                },
             meta: {
                 cacheLoaded: Boolean(hasCachedCounts),
                 cacheFresh: Boolean(hasFreshCache),
                 cacheRefreshing: dashboardGlobalSummaryCache.isRefreshing,
                 cacheUpdatedAt: dashboardGlobalSummaryCache.updatedAt,
                 cacheTtlMs: DASHBOARD_GLOBAL_SUMMARY_CACHE_TTL_MS,
+                diagnostics:
+                    dashboardGlobalSummaryCache.diagnostics || null,
                 lastError: dashboardGlobalSummaryCache.lastError
             }
         });
@@ -2013,6 +2356,104 @@ const getGlobalServiceStatusSummaryList = async (req, res, next) => {
                 totalActiveServicesCached: allActiveServices.length,
                 totalUnhandledServices: unhandledTotal,
                 totalAcknowledgedServices: acknowledgedTotal
+            }
+        });
+    } catch (error) {
+        return handleCentreonError(error, res, next);
+    }
+};
+
+const getGlobalServiceResourcesParity = async (
+    req,
+    res,
+    next
+) => {
+    try {
+        const forceRefresh = [
+            "1",
+            "true",
+            "yes"
+        ].includes(
+            String(req.query.refresh || "")
+                .trim()
+                .toLowerCase()
+        );
+        const now = Date.now();
+        const cacheLoaded = Boolean(
+            dashboardResourcesParityCache.updatedAt &&
+            dashboardResourcesParityCache.counts.allActiveIssues !== null
+        );
+        const cacheFresh = Boolean(
+            dashboardResourcesParityCache.updatedAt &&
+            now - dashboardResourcesParityCache.updatedAt <
+                DASHBOARD_RESOURCES_PARITY_CACHE_TTL_MS
+        );
+
+        if (
+            (forceRefresh || !cacheFresh) &&
+            !dashboardResourcesParityCache.isRefreshing
+        ) {
+            await refreshDashboardResourcesParityCache(req);
+        }
+
+        const refreshedCacheLoaded = Boolean(
+            dashboardResourcesParityCache.updatedAt &&
+            dashboardResourcesParityCache.counts.allActiveIssues !== null
+        );
+
+        return res.json({
+            success: true,
+            readOnly: true,
+            productionDashboardChanged: false,
+            source: "centreon-monitoring-resources",
+            filters: {
+                states: [
+                    "unhandled_problems"
+                ],
+                statusTypes: [
+                    "hard"
+                ],
+                types: [
+                    "service"
+                ],
+                statuses: [
+                    "CRITICAL",
+                    "WARNING",
+                    "UNKNOWN"
+                ]
+            },
+            cached: refreshedCacheLoaded,
+            refreshing:
+                dashboardResourcesParityCache.isRefreshing,
+            counts:
+                dashboardResourcesParityCache.counts,
+            diagnostics:
+                dashboardResourcesParityCache.diagnostics,
+            samples: {
+                critical:
+                    dashboardResourcesParityCache.services.critical.slice(0, 2),
+                warning:
+                    dashboardResourcesParityCache.services.warning.slice(0, 2),
+                unknown:
+                    dashboardResourcesParityCache.services.unknown.slice(0, 2)
+            },
+            meta: {
+                cacheLoaded: refreshedCacheLoaded,
+                cacheFresh: Boolean(
+                    dashboardResourcesParityCache.updatedAt &&
+                    Date.now() - dashboardResourcesParityCache.updatedAt <
+                        DASHBOARD_RESOURCES_PARITY_CACHE_TTL_MS
+                ),
+                cacheRefreshing:
+                    dashboardResourcesParityCache.isRefreshing,
+                cacheUpdatedAt:
+                    dashboardResourcesParityCache.updatedAt,
+                cacheTtlMs:
+                    DASHBOARD_RESOURCES_PARITY_CACHE_TTL_MS,
+                pageLimit:
+                    DASHBOARD_RESOURCES_PAGE_LIMIT,
+                lastError:
+                    dashboardResourcesParityCache.lastError
             }
         });
     } catch (error) {
@@ -2678,6 +3119,10 @@ const unacknowledgeService = async (req, res, next) => {
             hostName: targetHost,
             serviceDescription: targetService
         });
+        // The production cache is unhandled-only. Re-query Centreon after
+        // UNACK instead of inventing a local resource record.
+        dashboardGlobalSummaryCache.updatedAt = null;
+        refreshDashboardGlobalSummaryCache(req);
 
         let auditLogged = false;
         let auditError = null;
@@ -2842,6 +3287,7 @@ module.exports = {
     getGlobalServiceStatusSummary,
     getGlobalServiceStatusSummaryList,
     getGlobalServiceFilterOptions,
+    getGlobalServiceResourcesParity,
     acknowledgeService,
     unacknowledgeService,
     testMonitoringServers,

@@ -28,6 +28,7 @@ router.get('/services/status/summary', centreonController.getServiceStatusSummar
 router.get('/services/status/global-summary', centreonController.getGlobalServiceStatusSummary);
 router.get('/services/status/global-summary/list', centreonController.getGlobalServiceStatusSummaryList);
 router.get('/services/status/global-summary/options', centreonController.getGlobalServiceFilterOptions);
+router.get('/services/status/resources-parity', centreonController.getGlobalServiceResourcesParity);
 router.get('/services', centreonController.getAllServices);
 router.get('/services/host/:hostId', centreonController.getServicesByHost);
 
