@@ -675,6 +675,25 @@ export default function Dashboard() {
         unknown: null
     });
 
+    const [pollerServicePage, setPollerServicePage] = useState(1);
+    const [pollerServiceLimit, setPollerServiceLimit] = useState(20);
+    const [pollerServiceMeta, setPollerServiceMeta] = useState({
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 1,
+        filteredTotal: 0
+    });
+    const [pollerServiceFilters, setPollerServiceFilters] = useState({
+        host: '',
+        service: ''
+    });
+    const [pollerServiceOptions, setPollerServiceOptions] = useState({
+        hosts: [],
+        services: []
+    });
+    const pollerServiceRequestIdRef = useRef(0);
+
     // --- GLOBAL SEARCH STATE ---
     const [debouncedHostSearch, setDebouncedHostSearch] = useState('');
     const [debouncedServiceSearch, setDebouncedServiceSearch] = useState('');
@@ -851,7 +870,10 @@ export default function Dashboard() {
             setSelectedPoller(null);
             setSelectedPollerId(null);
             setPollerHosts([]);
-            setPollerServices([]);
+                                                    setPollerServices([]);
+                                                    setPollerServicePage(1);
+                                                    setPollerServiceFilters({ host: '', service: '' });
+                                                    setPollerServiceOptions({ hosts: [], services: [] });
             setPollerServiceCounts({
                 allActiveIssues: null,
                 critical: null,
@@ -1384,98 +1406,121 @@ export default function Dashboard() {
         }
     }, []);
 
-    const fetchServicesForVisibleHosts = useCallback(async (hosts) => {
+    const fetchPollerServiceSummary = useCallback(async ({
+        pollerId,
+        type = 'all',
+        page = 1,
+        limit = 20,
+        host = '',
+        service = ''
+    }) => {
+        if (!pollerId) return;
+
+        const requestId = pollerServiceRequestIdRef.current + 1;
+        pollerServiceRequestIdRef.current = requestId;
+        const isLatestRequest = () =>
+            pollerServiceRequestIdRef.current === requestId;
+
         try {
             setIsLoadingPollerServices(true);
 
             const token = localStorage.getItem('centreon_auth_token');
+            const params = new URLSearchParams({
+                page: String(page),
+                limit: String(limit),
+                type,
+                host,
+                service
+            });
 
-            const hostsWithIds = hosts
-                .map(host => ({
-                    host,
-                    hostId: host.id ?? host.host_id
-                }))
-                .filter(item => item.hostId !== undefined && item.hostId !== null);
+            const response = await fetch(
+                `${BASE_API_URL}/api/centreon/pollers/${pollerId}/services/summary?${params.toString()}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                }
+            );
 
-            if (hostsWithIds.length === 0) {
-                setPollerServices([]);
-                setPollerServiceCounts({
-                    allActiveIssues: 0,
-                    critical: 0,
-                    warning: 0,
-                    unknown: 0
-                });
-                return;
+            const payload = await response.json().catch(() => null);
+
+            if (!response.ok) {
+                throw new Error(
+                    payload?.message ||
+                    `Poller service summary failed with HTTP ${response.status}`
+                );
             }
 
-            const results = await Promise.all(
-                hostsWithIds.map(async ({ host, hostId }) => {
-                    try {
-                        const response = await fetch(`${BASE_API_URL}/api/centreon/services/host/${hostId}`, {
-                            headers: {
-                                'Authorization': `Bearer ${token}`
-                            }
-                        });
+            if (!isLatestRequest()) return;
 
-                        if (!response.ok) {
-                            throw new Error(`HTTP Error ${response.status}`);
-                        }
+            const normalizedResults = (payload?.data?.result || [])
+                .map(normalizeService);
 
-                        const payload = await response.json();
-
-                        return (payload.data?.result || []).map(service => normalizeService({
-                            ...service,
-                            host: service.host || {
-                                id: hostId,
-                                name: host.name,
-                                display_name: host.display_name,
-                                alias: host.alias,
-                                poller_id: host.poller_id,
-                                poller_name: host.poller_name
-                            }
-                        }));
-
-                    } catch (error) {
-                        console.warn("Failed loading services for host:", hostId, error);
-                        return [];
-                    }
-                })
-            );
-
-            const allServices = results.flat();
-
-            const activeIssueServices = allServices.filter(service =>
-                service.statusCode === 1 ||
-                service.statusCode === 2 ||
-                service.statusCode === 3
-            );
-
-            setPollerServices(activeIssueServices);
-            setPollerServiceCounts(buildServiceCounts(activeIssueServices));
-
-        } catch (error) {
-            console.error("Error loading services for visible poller hosts:", error);
-            setPollerServices([]);
-            setPollerServiceCounts({
+            setPollerServices(normalizedResults);
+            setPollerServiceCounts(payload?.counts || {
                 allActiveIssues: 0,
                 critical: 0,
                 warning: 0,
                 unknown: 0
             });
+            setPollerServiceMeta(payload?.meta || {
+                page,
+                limit,
+                total: normalizedResults.length,
+                totalPages: 1,
+                filteredTotal: normalizedResults.length
+            });
+            setPollerServiceOptions({
+                hosts: Array.isArray(payload?.options?.hosts)
+                    ? payload.options.hosts
+                    : [],
+                services: Array.isArray(payload?.options?.services)
+                    ? payload.options.services
+                    : []
+            });
+
+            if (
+                payload?.cached === false ||
+                payload?.meta?.cacheLoaded === false ||
+                payload?.meta?.cacheRefreshing === true
+            ) {
+                setTimeout(() => {
+                    if (isLatestRequest()) {
+                        fetchPollerServiceSummary({
+                            pollerId,
+                            type,
+                            page,
+                            limit,
+                            host,
+                            service
+                        });
+                    }
+                }, 10000);
+            }
+        } catch (error) {
+            if (!isLatestRequest()) return;
+            console.error('Error loading authoritative Poller services:', error);
+            setPollerServices([]);
+            setPollerServiceMeta({
+                page,
+                limit,
+                total: 0,
+                totalPages: 1,
+                filteredTotal: 0
+            });
         } finally {
-            setIsLoadingPollerServices(false);
+            if (isLatestRequest()) {
+                setIsLoadingPollerServices(false);
+            }
         }
-    }, [buildServiceCounts]);
+    }, []);
 
     const fetchPollerHosts = useCallback(async (pollerId, page = 1, limit = pollerHostLimit) => {
         try {
             if (!pollerId) return;
-
             setIsLoadingPollerHosts(true);
-            setIsLoadingPollerServices(true);
 
             const token = localStorage.getItem('centreon_auth_token');
-
             const response = await fetch(
                 `${BASE_API_URL}/api/centreon/pollers/${pollerId}/hosts?page=${page}&limit=${limit}`,
                 {
@@ -1490,7 +1535,6 @@ export default function Dashboard() {
             }
 
             const payload = await response.json();
-
             const returnedHosts = payload.data?.result || [];
 
             setPollerHosts(returnedHosts);
@@ -1502,48 +1546,23 @@ export default function Dashboard() {
             });
 
             if (payload.meta?.hostCacheRefreshing && !payload.meta?.hostCacheLoaded) {
-                setPollerServices([]);
-                setPollerServiceCounts({
-                    allActiveIssues: null,
-                    critical: null,
-                    warning: null,
-                    unknown: null
-                });
-
                 setTimeout(() => {
                     fetchPollerHosts(pollerId, page, limit);
                 }, 5000);
-
-                return;
             }
-
-            if (returnedHosts.length > 0) {
-                await fetchServicesForVisibleHosts(returnedHosts);
-            } else {
-                setPollerServices([]);
-                setPollerServiceCounts({
-                    allActiveIssues: 0,
-                    critical: 0,
-                    warning: 0,
-                    unknown: 0
-                });
-                setIsLoadingPollerServices(false);
-            }
-
         } catch (error) {
-            console.error('Error fetching poller hosts:', error);
-            setPollerServices([]);
-            setPollerServiceCounts({
-                allActiveIssues: 0,
-                critical: 0,
-                warning: 0,
-                unknown: 0
+            console.error('Error fetching Poller hosts:', error);
+            setPollerHosts([]);
+            setPollerHostMeta({
+                page,
+                limit,
+                total: 0,
+                totalPages: 1
             });
-            setIsLoadingPollerServices(false);
         } finally {
             setIsLoadingPollerHosts(false);
         }
-    }, [pollerHostLimit, fetchServicesForVisibleHosts]);
+    }, [pollerHostLimit]);
 
     // ============================================================
     // MANUAL REFRESH
@@ -1569,6 +1588,16 @@ export default function Dashboard() {
                 pollerHostPage,
                 pollerHostLimit
             );
+        }
+        if (selectedPollerId) {
+            fetchPollerServiceSummary({
+                pollerId: selectedPollerId,
+                type: currentTableType,
+                page: pollerServicePage,
+                limit: pollerServiceLimit,
+                host: pollerServiceFilters.host,
+                service: pollerServiceFilters.service
+            });
         }
 
         if (location.pathname === '/datacenter') {
@@ -1597,6 +1626,16 @@ export default function Dashboard() {
             if (selectedPollerId) {
                 fetchPollerHosts(selectedPollerId, pollerHostPage, pollerHostLimit);
             }
+            if (selectedPollerId) {
+                fetchPollerServiceSummary({
+                    pollerId: selectedPollerId,
+                    type: currentTableType,
+                    page: pollerServicePage,
+                    limit: pollerServiceLimit,
+                    host: pollerServiceFilters.host,
+                    service: pollerServiceFilters.service
+                });
+            }
             if (location.pathname === '/datacenter') {
                 fetchDataCenterHostGroups({ background: true });
             }
@@ -1607,9 +1646,15 @@ export default function Dashboard() {
         refreshDashboardData,
         fetchPollersRoster,
         fetchPollerHosts,
+        fetchPollerServiceSummary,
         selectedPollerId,
         pollerHostPage,
         pollerHostLimit,
+        currentTableType,
+        pollerServicePage,
+        pollerServiceLimit,
+        pollerServiceFilters.host,
+        pollerServiceFilters.service,
         location.pathname,
         navigate,
         fetchDataCenterHostGroups
@@ -1635,6 +1680,28 @@ export default function Dashboard() {
             fetchPollerHosts(selectedPollerId, pollerHostPage, pollerHostLimit);
         }
     }, [location.pathname, selectedPollerId, pollerHostPage, pollerHostLimit, fetchPollerHosts]);
+
+    useEffect(() => {
+        if (location.pathname === '/pollers' && selectedPollerId) {
+            fetchPollerServiceSummary({
+                pollerId: selectedPollerId,
+                type: currentTableType,
+                page: pollerServicePage,
+                limit: pollerServiceLimit,
+                host: pollerServiceFilters.host,
+                service: pollerServiceFilters.service
+            });
+        }
+    }, [
+        location.pathname,
+        selectedPollerId,
+        currentTableType,
+        pollerServicePage,
+        pollerServiceLimit,
+        pollerServiceFilters.host,
+        pollerServiceFilters.service,
+        fetchPollerServiceSummary
+    ]);
 
     // ============================================================
     // MEMOIZED DATA
@@ -1800,7 +1867,7 @@ export default function Dashboard() {
 
     const displayCounts = useMemo(() => {
         if (location.pathname === '/pollers' && selectedPollerId) {
-            return buildServiceCounts(pollerServices, statusFilter);
+            return pollerServiceCounts;
         }
 
         if (location.pathname === '/dashboard' && activePollerContext === 'all') {
@@ -1826,8 +1893,7 @@ export default function Dashboard() {
     }, [
         location.pathname,
         selectedPollerId,
-        pollerServices,
-        statusFilter,
+        pollerServiceCounts,
         activePollerContext,
         globalDashboardCounts,
         counts,
@@ -1915,28 +1981,8 @@ export default function Dashboard() {
     ]);
 
     const filteredPollerServices = useMemo(() => {
-        let services = pollerServices;
-
-        if (currentTableType === 'critical') {
-            services = services.filter((service) => service.statusCode === 2);
-        } else if (currentTableType === 'warning') {
-            services = services.filter((service) => service.statusCode === 1);
-        } else if (currentTableType === 'unknown') {
-            services = services.filter((service) => service.statusCode === 3);
-        }
-
-        return services.filter((service) => {
-            const acknowledged = isServiceAcknowledged(service);
-            if (statusFilter === 'acknowledged') return acknowledged;
-            if (statusFilter === 'all') return true;
-            return !acknowledged;
-        });
-    }, [
-        pollerServices,
-        currentTableType,
-        statusFilter,
-        isServiceAcknowledged
-    ]);
+        return pollerServices;
+    }, [pollerServices]);
 
     // ============================================================
     // PAGINATION HELPERS
@@ -1977,8 +2023,8 @@ export default function Dashboard() {
     };
 
     const handlePollerPageSizeChange = (e) => {
-        setPollerHostLimit(Number(e.target.value));
-        setPollerHostPage(1);
+        setPollerServiceLimit(Number(e.target.value));
+        setPollerServicePage(1);
     };
 
     // ============================================================
@@ -2221,11 +2267,14 @@ export default function Dashboard() {
             location.pathname === '/pollers' &&
             selectedPollerId
         ) {
-            await fetchPollerHosts(
-                selectedPollerId,
-                pollerHostPage,
-                pollerHostLimit
-            );
+            await fetchPollerServiceSummary({
+                pollerId: selectedPollerId,
+                type: currentTableType,
+                page: pollerServicePage,
+                limit: pollerServiceLimit,
+                host: pollerServiceFilters.host,
+                service: pollerServiceFilters.service
+            });
 
             return;
         }
@@ -2342,11 +2391,14 @@ export default function Dashboard() {
             location.pathname === '/pollers' &&
             selectedPollerId
         ) {
-            await fetchPollerHosts(
-                selectedPollerId,
-                pollerHostPage,
-                pollerHostLimit
-            );
+            await fetchPollerServiceSummary({
+                pollerId: selectedPollerId,
+                type: currentTableType,
+                page: pollerServicePage,
+                limit: pollerServiceLimit,
+                host: pollerServiceFilters.host,
+                service: pollerServiceFilters.service
+            });
 
             return;
         }
@@ -2453,6 +2505,8 @@ export default function Dashboard() {
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(true);
+                                } else if (location.pathname === '/pollers') {
+                                    setPollerServicePage(1);
                                 }
                             }}
                         >
@@ -2469,6 +2523,8 @@ export default function Dashboard() {
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(false);
+                                } else if (location.pathname === '/pollers') {
+                                    setPollerServicePage(1);
                                 }
                             }}
                         >
@@ -2485,6 +2541,8 @@ export default function Dashboard() {
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(false);
+                                } else if (location.pathname === '/pollers') {
+                                    setPollerServicePage(1);
                                 }
                             }}
                         >
@@ -2501,6 +2559,8 @@ export default function Dashboard() {
                                 if (location.pathname === '/dashboard') {
                                     setServicePage(1);
                                     setShowAllStatusesForPoller(false);
+                                } else if (location.pathname === '/pollers') {
+                                    setPollerServicePage(1);
                                 }
                             }}
                         >
@@ -2837,6 +2897,8 @@ export default function Dashboard() {
 
                                                                     setCurrentTableType('all');
                                                                     setPollerHostPage(1);
+                                                                    setPollerServicePage(1);
+                                                                    setPollerServiceFilters({ host: '', service: '' });
 
                                                                     setPollerHosts([]);
                                                                     setPollerServices([]);
@@ -2901,18 +2963,18 @@ export default function Dashboard() {
                                         <div className="pollers-pagination-controls">
                                             <div className="pollers-pagination-left">
                                                 <span className="pollers-pagination-info">
-                                                    Host Page {pollerHostMeta.page || pollerHostPage} of {pollerHostMeta.totalPages || 1}
+                                                    Service Page {pollerServiceMeta.page || pollerServicePage} of {pollerServiceMeta.totalPages || 1}
                                                     {' | '} Hosts: {pollerHostMeta.total || 0}
-                                                    {' | '} Active Services: {pollerServices.length}
+                                                    {' | '} Matching Services: {pollerServiceMeta.total || 0}
                                                 </span>
                                             </div>
                                             <div className="pollers-pagination-right">
                                                 <span className="pollers-pagination-label">Show:</span>
                                                 <select
                                                     className="pollers-page-size-select"
-                                                    value={pollerHostLimit}
+                                                    value={pollerServiceLimit}
                                                     onChange={handlePollerPageSizeChange}
-                                                    disabled={isLoadingPollerHosts || isLoadingPollerServices}
+                                                    disabled={isLoadingPollerServices}
                                                 >
                                                     <option value="10">10</option>
                                                     <option value="20">20</option>
@@ -2930,23 +2992,21 @@ export default function Dashboard() {
                                                     <button
                                                         className="pollers-page-btn"
                                                         onClick={() => {
-                                                            setPollerHostPage(prev => Math.max(prev - 1, 1));
-                                                            setCurrentTableType('all');
+                                                            setPollerServicePage(prev => Math.max(prev - 1, 1));
                                                         }}
-                                                        disabled={pollerHostPage <= 1 || isLoadingPollerHosts || isLoadingPollerServices}
+                                                        disabled={pollerServicePage <= 1 || isLoadingPollerServices}
                                                     >
                                                         ◀ Prev
                                                     </button>
                                                     <span className="pollers-page-info">
-                                                        Page {pollerHostMeta.page || pollerHostPage} of {pollerHostMeta.totalPages || 1}
+                                                        Page {pollerServiceMeta.page || pollerServicePage} of {pollerServiceMeta.totalPages || 1}
                                                     </span>
                                                     <button
                                                         className="pollers-page-btn"
                                                         onClick={() => {
-                                                            setPollerHostPage(prev => prev + 1);
-                                                            setCurrentTableType('all');
+                                                            setPollerServicePage(prev => prev + 1);
                                                         }}
-                                                        disabled={pollerHostPage >= (pollerHostMeta.totalPages || 1) || isLoadingPollerHosts || isLoadingPollerServices}
+                                                        disabled={pollerServicePage >= (pollerServiceMeta.totalPages || 1) || isLoadingPollerServices}
                                                     >
                                                         Next ▶
                                                     </button>
@@ -2955,8 +3015,48 @@ export default function Dashboard() {
                                         </div>
                                     </div>
 
+                                    <div className="filter-section-compact" style={{ marginBottom: '16px' }}>
+                                        <div className="filter-controls-inline">
+                                            <div className="filter-input-group-compact">
+                                                <label>HOST</label>
+                                                <FilterCombobox
+                                                    label="Host"
+                                                    value={pollerServiceFilters.host}
+                                                    options={pollerServiceOptions.hosts}
+                                                    loading={isLoadingPollerServices}
+                                                    placeholder="Filter Poller host..."
+                                                    onChange={(value) => {
+                                                        setPollerServiceFilters((current) => ({ ...current, host: value }));
+                                                        setPollerServicePage(1);
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="filter-input-group-compact">
+                                                <label>SERVICES</label>
+                                                <FilterCombobox
+                                                    label="Service"
+                                                    value={pollerServiceFilters.service}
+                                                    options={pollerServiceOptions.services}
+                                                    loading={isLoadingPollerServices}
+                                                    placeholder="Filter Poller service..."
+                                                    onChange={(value) => {
+                                                        setPollerServiceFilters((current) => ({ ...current, service: value }));
+                                                        setPollerServicePage(1);
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="filter-input-group-compact">
+                                                <label>STATUS</label>
+                                                <div className="filter-readonly-compact" role="status" aria-label="Current Poller handling state">
+                                                    Unhandled Problems
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div className="table-wrapper">
                                         <table className="services-table">
+
                                             <thead>
                                                 <tr>
                                                     <th>Host</th>
@@ -2968,22 +3068,16 @@ export default function Dashboard() {
                                             </thead>
 
                                             <tbody>
-                                                {isLoadingPollerHosts ? (
+                                                {isLoadingPollerServices ? (
                                                     <tr>
                                                         <td colSpan="5" className="loading-cell">
-                                                            Loading hosts for {selectedPoller}...
-                                                        </td>
-                                                    </tr>
-                                                ) : isLoadingPollerServices ? (
-                                                    <tr>
-                                                        <td colSpan="5" className="loading-cell">
-                                                            Loading active services for visible hosts...
+                                                            Loading authoritative unhandled services for {selectedPoller}...
                                                         </td>
                                                     </tr>
                                                 ) : filteredPollerServices.length === 0 ? (
                                                     <tr>
                                                         <td colSpan="5" className="loading-cell">
-                                                            No active Critical, Warning, or Unknown services found for this host page.
+                                                            No unhandled Critical, Warning, or Unknown services match the selected Poller filters.
                                                         </td>
                                                     </tr>
                                                 ) : (
